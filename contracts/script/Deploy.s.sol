@@ -12,7 +12,8 @@ import {ClaimEscrow} from "../src/ClaimEscrow.sol";
 contract DeployClaimEscrow is Script {
     function run() external {
         // USDC address on Arc testnet
-        // TODO: Set actual USDC testnet address
+        // Official Arc testnet USDC: 0x3600000000000000000000000000000000000000
+        // Uses ERC-20 interface with 6 decimals
         address usdcAddress = vm.envAddress("USDC_ADDRESS");
         
         vm.startBroadcast();

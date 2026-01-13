@@ -7,9 +7,13 @@ optimizer = true
 optimizer_runs = 200
 via_ir = false
 
-[profile.default.arc_testnet]
-chain_id = 11124
-rpc_url = "https://arc-testnet.rpc.circle.com"
+# Arc testnet RPC endpoint
+[rpc_endpoints]
+arc_testnet = "https://rpc.testnet.arc.network"
+
+# Arc testnet chain config
+[etherscan]
+arc_testnet = { key = "${ETHERSCAN_API_KEY}", chain = 11124, url = "https://testnet.arcscan.app/api" }
 
 [fmt]
 line_length = 120
