@@ -99,8 +99,8 @@ def verify_payment_receipt(
     
     # Store receipt for audit trail
     x402_receipt = X402Receipt(
-        id=uuid.uuid4(),
-        claim_id=uuid.UUID(claim_id),
+        id=str(uuid.uuid4()),
+        claim_id=claim_id,  # Using string ID
         verifier_type=verifier_type,
         amount=expected_amount,
         gateway_payment_id=receipt[:36] if len(receipt) >= 36 else receipt,
