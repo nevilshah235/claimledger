@@ -1,0 +1,129 @@
+# ClaimLedger Development Rules
+
+## Git Workflow - CRITICAL
+
+**NEVER commit directly to `main` branch.** Always use feature branches.
+
+### Before Making Any Code Changes:
+1. Check current branch: `git branch --show-current`
+2. If on `main`, create a feature branch first:
+   ```bash
+   git checkout -b feat/description-of-change
+   ```
+
+### Branch Naming Convention:
+- `feat/` - New features (e.g., `feat/circle-wallet-integration`)
+- `fix/` - Bug fixes (e.g., `fix/uuid-handling`)
+- `docs/` - Documentation (e.g., `docs/api-reference`)
+- `test/` - Test additions (e.g., `test/agent-evaluation`)
+- `refactor/` - Code refactoring
+- `chore/` - Maintenance tasks
+
+### Commit Message Format (Conventional Commits):
+```
+<type>(<scope>): <description>
+
+[optional body]
+```
+
+**Types:** feat, fix, docs, test, refactor, chore, ci
+
+**Examples:**
+- `feat(agent): add Gemini integration for claim evaluation`
+- `fix(api): resolve UUID handling for SQLite compatibility`
+- `test(verifier): add x402 payment flow tests`
+
+## Project Structure
+
+```
+claimledger/
+├── backend/           # Python FastAPI
+│   ├── src/
+│   │   ├── api/       # API endpoints
+│   │   ├── agent/     # AI agent (Google Agents Framework)
+│   │   ├── services/  # Business logic (x402, Gateway, blockchain)
+│   │   └── models.py  # SQLAlchemy models
+│   └── tests/         # pytest tests
+├── frontend/          # Next.js + TypeScript
+│   ├── app/           # Pages
+│   └── components/    # React components
+├── contracts/         # Solidity (Foundry)
+│   ├── src/           # Contract source
+│   └── test/          # Forge tests
+└── docs/              # Documentation
+```
+
+## Development Commands (Makefile)
+
+Always use `make` commands when available:
+- `make dev` - Start both servers
+- `make dev-backend` - Backend only (port 8000)
+- `make test` - Run all tests
+- `make lint` - Run linters
+- `make check` - Lint + test (before committing)
+- `make branch name=feat/x` - Create feature branch
+- `make pr` - Push and create PR
+
+## Code Style
+
+### Python (Backend):
+- Use `black` for formatting
+- Use `ruff` for linting
+- Always add type hints
+- Docstrings for public functions
+
+### TypeScript (Frontend):
+- Strict TypeScript mode
+- Use `prettier` for formatting
+
+### Solidity (Contracts):
+- Use `forge fmt`
+- NatSpec documentation required
+
+## Testing Requirements
+
+Before committing:
+1. Run `make check` (or `make lint && make test`)
+2. Ensure no linting errors
+3. All tests pass
+4. New code has test coverage
+
+## Environment Variables
+
+- Backend: Copy `backend/.env.example` to `backend/.env`
+- Frontend: Copy `frontend/.env.example` to `frontend/.env.local`
+- Never commit `.env` or `.env.local` files
+
+## Key Technologies
+
+- **Backend:** FastAPI, SQLAlchemy, google-genai (Gemini)
+- **Frontend:** Next.js, TypeScript, Tailwind CSS
+- **Blockchain:** Arc testnet, USDC, Foundry
+- **Payments:** Circle Gateway (x402), Circle Wallets
+- **Database:** SQLite (dev), PostgreSQL (prod)
+
+## API Endpoints
+
+- `POST /claims` - Submit claim (Form data)
+- `GET /claims/{id}` - Get claim status
+- `POST /verifier/document|image|fraud` - x402-protected verifiers
+- `POST /agent/evaluate/{claimId}` - AI evaluation
+- `POST /blockchain/settle/{claimId}` - USDC settlement
+
+## Common Patterns
+
+### Creating a new API endpoint:
+1. Add route in `backend/src/api/`
+2. Register router in `backend/src/main.py`
+3. Add tests in `backend/tests/`
+
+### Working with database:
+- Models in `backend/src/models.py`
+- Use string UUIDs (SQLite compatible)
+- Import `get_db` from `database.py` for sessions
+
+### x402 Payment Flow:
+1. Return HTTP 402 with payment details if no receipt
+2. Validate receipt header `X-Payment-Receipt`
+3. Store receipt in `x402_receipts` table
+4. Process request and return result
