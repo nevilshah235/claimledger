@@ -58,7 +58,7 @@ async def create_claim(
     Returns claim_id and initial status.
     """
     # Create new claim
-    claim_id = uuid.uuid4()
+    claim_id = str(uuid.uuid4())
     claim = Claim(
         id=claim_id,
         claimant_address=claimant_address,
@@ -81,7 +81,7 @@ async def create_claim(
         file_path = f"uploads/{claim_id}/{file.filename}"
         
         evidence = Evidence(
-            id=uuid.uuid4(),
+            id=str(uuid.uuid4()),
             claim_id=claim_id,
             file_type=file_type,
             file_path=file_path,
@@ -113,12 +113,13 @@ async def get_claim(
     - processing_costs: Sum of x402 micropayments
     - tx_hash: Arc transaction hash (if settled)
     """
+    # Validate UUID format
     try:
-        claim_uuid = uuid.UUID(claim_id)
+        uuid.UUID(claim_id)  # Validates format
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid claim ID format")
     
-    claim = db.query(Claim).filter(Claim.id == claim_uuid).first()
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
     
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
