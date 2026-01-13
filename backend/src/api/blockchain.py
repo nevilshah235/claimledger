@@ -58,13 +58,14 @@ async def settle_claim(
     
     Returns transaction hash for verification on Arc explorer.
     """
+    # Validate UUID format
     try:
-        claim_uuid = uuid.UUID(claim_id)
+        uuid.UUID(claim_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid claim ID format")
     
-    # Get claim
-    claim = db.query(Claim).filter(Claim.id == claim_uuid).first()
+    # Get claim (using string ID)
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
     
@@ -88,7 +89,7 @@ async def settle_claim(
     # TODO: Integrate with actual blockchain call
     # For now, mock the transaction for demo
     tx_hash = await execute_settlement(
-        claim_id=str(claim_uuid),
+        claim_id=claim_id,
         amount=claim.approved_amount,
         recipient=recipient
     )

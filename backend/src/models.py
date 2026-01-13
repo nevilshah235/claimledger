@@ -2,14 +2,19 @@
 
 from datetime import datetime
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import declarative_base, relationship
 
+# Use String for UUID to support both SQLite and PostgreSQL
+# SQLite doesn't have native UUID type
 Base = declarative_base()
+
+
+def generate_uuid():
+    """Generate a UUID string."""
+    return str(uuid4())
 
 
 class Claim(Base):
@@ -17,7 +22,7 @@ class Claim(Base):
 
     __tablename__ = "claims"
 
-    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    id = Column(String(36), primary_key=True, default=generate_uuid)
     claimant_address = Column(String(42), nullable=False)  # Ethereum address
     claim_amount = Column(Numeric(18, 2), nullable=False)  # USDC amount
     status = Column(
@@ -47,8 +52,8 @@ class Evidence(Base):
 
     __tablename__ = "evidence"
 
-    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    claim_id = Column(PGUUID(as_uuid=True), ForeignKey("claims.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    claim_id = Column(String(36), ForeignKey("claims.id"), nullable=False)
     file_type = Column(String(20), nullable=False)  # image, document
     file_path = Column(String(255), nullable=False)  # Local file path
     ipfs_hash = Column(String(64), nullable=True)  # Optional IPFS hash
@@ -63,8 +68,8 @@ class Evaluation(Base):
 
     __tablename__ = "evaluations"
 
-    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    claim_id = Column(PGUUID(as_uuid=True), ForeignKey("claims.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    claim_id = Column(String(36), ForeignKey("claims.id"), nullable=False)
     reasoning = Column(Text, nullable=False)  # Agent reasoning trail
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
@@ -77,8 +82,8 @@ class X402Receipt(Base):
 
     __tablename__ = "x402_receipts"
 
-    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    claim_id = Column(PGUUID(as_uuid=True), ForeignKey("claims.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    claim_id = Column(String(36), ForeignKey("claims.id"), nullable=False)
     verifier_type = Column(String(20), nullable=False)  # document, image, fraud
     amount = Column(Numeric(18, 2), nullable=False)  # USDC amount
     gateway_payment_id = Column(String(255), nullable=False)

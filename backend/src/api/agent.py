@@ -56,13 +56,14 @@ async def evaluate_claim(
     
     **Fail-closed:** No funds move unless confidence >= 0.85
     """
+    # Validate UUID format
     try:
-        claim_uuid = uuid.UUID(claim_id)
+        uuid.UUID(claim_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid claim ID format")
     
-    # Get claim
-    claim = db.query(Claim).filter(Claim.id == claim_uuid).first()
+    # Get claim (using string ID)
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
     
@@ -77,7 +78,7 @@ async def evaluate_claim(
     db.commit()
     
     # Get evidence
-    evidence = db.query(Evidence).filter(Evidence.claim_id == claim_uuid).all()
+    evidence = db.query(Evidence).filter(Evidence.claim_id == claim_id).all()
     
     # Run agent evaluation
     # TODO: Integrate Google Agents Framework
@@ -98,8 +99,8 @@ async def evaluate_claim(
     
     # Store evaluation reasoning
     evaluation = Evaluation(
-        id=uuid.uuid4(),
-        claim_id=claim_uuid,
+        id=str(uuid.uuid4()),
+        claim_id=claim_id,
         reasoning=evaluation_result["reasoning"],
         created_at=datetime.utcnow()
     )

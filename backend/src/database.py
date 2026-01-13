@@ -11,7 +11,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/claimledger")
+# Default to SQLite for quick testing (no PostgreSQL needed)
+# For production, set DATABASE_URL to PostgreSQL connection string
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./claimledger.db")
 
 # Create engine
 engine = create_engine(DATABASE_URL, echo=False)
