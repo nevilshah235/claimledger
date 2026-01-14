@@ -59,14 +59,16 @@ class CircleWalletsService:
         
         return response.json()["data"]
     
-    async def initialize_user(self, user_id: str) -> Dict[str, Any]:
+    async def initialize_user(self, user_token: str) -> Dict[str, Any]:
         """
         Initialize user authentication challenge.
         
         This generates a challengeId that the frontend SDK uses to authenticate.
         
+        Note: For User-Controlled wallets, this requires userToken from frontend SDK.
+        
         Args:
-            user_id: Circle user ID
+            user_token: Circle user token (from frontend SDK authentication)
             
         Returns:
             Challenge data including challengeId
@@ -74,9 +76,11 @@ class CircleWalletsService:
         if not self.api_key:
             raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
         
+        # For User-Controlled wallets, /user/initialize requires userToken
+        # The userToken comes from the frontend SDK after user authenticates
         response = await self.http_client.post(
             f"{self.api_base_url}/user/initialize",
-            json={"userId": user_id}
+            json={"userToken": user_token}
         )
         response.raise_for_status()
         
