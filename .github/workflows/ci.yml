@@ -22,8 +22,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev
       
-      - name: Install Cython < 3.0 for PyYAML compatibility
-        run: pip install "cython<3.0.0" wheel
+      - name: Install Cython < 3.0 and PyYAML for compatibility
+        run: |
+          pip install "cython<3.0.0" wheel
+          pip install "pyyaml==5.4.1" --no-build-isolation
       
       - name: Install Rye
         run: pip install --upgrade pip setuptools wheel && pip install rye
