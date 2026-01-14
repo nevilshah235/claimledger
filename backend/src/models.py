@@ -94,15 +94,34 @@ class X402Receipt(Base):
     claim = relationship("Claim", back_populates="x402_receipts")
 
 
+class User(Base):
+    """User model for authentication."""
+
+    __tablename__ = "users"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)  # bcrypt hash
+    role = Column(String(20), nullable=False)  # "claimant" or "insurer"
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    wallet = relationship("UserWallet", back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+
 class UserWallet(Base):
-    """User-wallet mapping for Circle Wallets."""
+    """User-wallet mapping for Developer-Controlled Wallets."""
 
     __tablename__ = "user_wallets"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    user_id = Column(String(255), unique=True, nullable=False)  # Circle user ID
+    user_id = Column(String(36), ForeignKey("users.id"), unique=True, nullable=False)  # Our user ID
     wallet_address = Column(String(42), nullable=False)  # Ethereum address
-    circle_wallet_id = Column(String(255), nullable=True)  # Circle wallet ID
-    user_token = Column(String(255), nullable=True)  # Circle user token for SDK
+    circle_wallet_id = Column(String(255), nullable=False)  # Circle wallet ID
+    wallet_set_id = Column(String(255), nullable=True)  # Circle wallet set ID
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="wallet")
