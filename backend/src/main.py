@@ -7,17 +7,36 @@ ClaimLedger API - Agentic insurance claims with:
 - USDC settlement on Arc blockchain
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from .database import init_db
 
 # Import API routers
 from .api.claims import router as claims_router
 from .api.verifier import router as verifier_router
 from .api.agent import router as agent_router
 from .api.blockchain import router as blockchain_router
+from .api.auth import router as auth_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events."""
+    # Startup: Create database tables
+    print("🚀 Starting ClaimLedger API...")
+    init_db()
+    print("✅ Database tables created/verified")
+    yield
+    # Shutdown
+    print("👋 Shutting down ClaimLedger API...")
+
 
 app = FastAPI(
     title="ClaimLedger API",
+    lifespan=lifespan,
     description="""
     Agentic insurance claims platform with:
     - Multimodal claim submission
@@ -35,11 +54,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",  # Next.js dev server
+        "http://localhost:3001",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://localhost:3000/",  # With trailing slash
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Include API routers
@@ -47,6 +70,7 @@ app.include_router(claims_router)
 app.include_router(verifier_router)
 app.include_router(agent_router)
 app.include_router(blockchain_router)
+app.include_router(auth_router)
 
 
 @app.get("/")
@@ -61,7 +85,8 @@ async def root():
             "claims": "/claims",
             "verifier": "/verifier",
             "agent": "/agent",
-            "blockchain": "/blockchain"
+            "blockchain": "/blockchain",
+            "auth": "/auth"
         }
     }
 

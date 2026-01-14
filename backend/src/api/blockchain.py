@@ -11,12 +11,13 @@ import os
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Claim
+from ..models import Claim, User
+from ..api.auth import get_current_user
 
 router = APIRouter(prefix="/blockchain", tags=["blockchain"])
 
@@ -45,26 +46,37 @@ class SettlementResponse(BaseModel):
 async def settle_claim(
     claim_id: str,
     request: SettlementRequest = SettlementRequest(),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Settle an approved claim by transferring USDC on Arc.
     
     Calls ClaimEscrow.approveClaim() to release escrowed USDC to claimant.
     
+    Requires authentication as insurer.
+    
     Requirements:
+    - User must be an insurer
     - Claim must be in APPROVED status
     - approved_amount must be set
     
     Returns transaction hash for verification on Arc explorer.
     """
+    # Verify user is an insurer
+    if current_user.role != "insurer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only insurers can settle claims"
+        )
+    # Validate UUID format
     try:
-        claim_uuid = uuid.UUID(claim_id)
+        uuid.UUID(claim_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid claim ID format")
     
-    # Get claim
-    claim = db.query(Claim).filter(Claim.id == claim_uuid).first()
+    # Get claim (using string ID)
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
     
@@ -88,7 +100,7 @@ async def settle_claim(
     # TODO: Integrate with actual blockchain call
     # For now, mock the transaction for demo
     tx_hash = await execute_settlement(
-        claim_id=str(claim_uuid),
+        claim_id=claim_id,
         amount=claim.approved_amount,
         recipient=recipient
     )

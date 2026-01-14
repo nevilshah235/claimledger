@@ -17,13 +17,26 @@ jobs:
         with:
           python-version: '3.11'
       
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev
+      
+      - name: Install Cython < 3.0 and PyYAML for compatibility
+        run: |
+          pip install "cython<3.0.0" wheel
+          pip install "pyyaml==5.4.1" --no-build-isolation
+      
+      - name: Install compatible markupsafe for Rye
+        run: pip install "markupsafe<2.1.0"
+      
       - name: Install Rye
-        run: pip install rye
+        run: pip install --upgrade pip setuptools wheel && pip install rye
       
       - name: Install dependencies
         working-directory: ./backend
         run: rye sync
-      
+     
       - name: Run tests
         working-directory: ./backend
         run: rye run pytest
