@@ -2,14 +2,16 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Button } from './ui';
+import { WalletConnect } from './WalletConnect';
 
 interface NavbarProps {
   walletAddress?: string;
-  onConnectWallet?: () => void;
+  userToken?: string;
+  onConnect: (address: string, userToken?: string) => void;
+  onDisconnect: () => void;
 }
 
-export function Navbar({ walletAddress, onConnectWallet }: NavbarProps) {
+export function Navbar({ walletAddress, userToken, onConnect, onDisconnect }: NavbarProps) {
   const pathname = usePathname();
 
   const isActive = (path: string) => pathname === path;
@@ -59,22 +61,12 @@ export function Navbar({ walletAddress, onConnectWallet }: NavbarProps) {
 
             {/* Wallet */}
             <div className="flex items-center gap-3">
-              {walletAddress ? (
-                <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10">
-                  <div className="w-2 h-2 rounded-full bg-emerald-400" />
-                  <span className="text-sm font-medium text-white">
-                    {truncateAddress(walletAddress)}
-                  </span>
-                </div>
-              ) : (
-                <Button 
-                  variant="primary" 
-                  size="sm"
-                  onClick={onConnectWallet}
-                >
-                  Connect Wallet
-                </Button>
-              )}
+              <WalletConnect
+                address={walletAddress}
+                userToken={userToken}
+                onConnect={onConnect}
+                onDisconnect={onDisconnect}
+              />
             </div>
           </div>
         </div>

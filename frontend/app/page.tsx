@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Navbar } from './components/Navbar';
 import { Button, Card } from './components/ui';
@@ -45,9 +46,45 @@ const stats = [
 ];
 
 export default function HomePage() {
+  const [walletAddress, setWalletAddress] = useState<string | undefined>();
+  const [userToken, setUserToken] = useState<string | undefined>();
+
+  // Handle wallet connection
+  const handleConnect = (address: string, token?: string) => {
+    setWalletAddress(address);
+    if (token) {
+      setUserToken(token);
+      localStorage.setItem('circle_user_token', token);
+      localStorage.setItem('wallet_address', address);
+    }
+  };
+
+  // Handle wallet disconnection
+  const handleDisconnect = () => {
+    setWalletAddress(undefined);
+    setUserToken(undefined);
+    localStorage.removeItem('circle_user_token');
+    localStorage.removeItem('wallet_address');
+  };
+
+  // Restore wallet from localStorage on mount
+  useEffect(() => {
+    const storedToken = localStorage.getItem('circle_user_token');
+    const storedAddress = localStorage.getItem('wallet_address');
+    if (storedToken && storedAddress) {
+      setUserToken(storedToken);
+      setWalletAddress(storedAddress);
+    }
+  }, []);
+
   return (
     <div className="min-h-screen">
-      <Navbar />
+      <Navbar 
+        walletAddress={walletAddress}
+        userToken={userToken}
+        onConnect={handleConnect}
+        onDisconnect={handleDisconnect}
+      />
       
       {/* Hero Section */}
       <section className="pt-32 pb-20 px-4">

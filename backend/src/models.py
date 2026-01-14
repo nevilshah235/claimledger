@@ -92,3 +92,17 @@ class X402Receipt(Base):
 
     # Relationships
     claim = relationship("Claim", back_populates="x402_receipts")
+
+
+class UserWallet(Base):
+    """User-wallet mapping for Circle Wallets."""
+
+    __tablename__ = "user_wallets"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(255), unique=True, nullable=False)  # Circle user ID
+    wallet_address = Column(String(42), nullable=False)  # Ethereum address
+    circle_wallet_id = Column(String(255), nullable=True)  # Circle wallet ID
+    user_token = Column(String(255), nullable=True)  # Circle user token for SDK
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

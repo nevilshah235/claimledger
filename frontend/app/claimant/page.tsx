@@ -10,15 +10,39 @@ import { api } from '@/lib/api';
 
 export default function ClaimantPage() {
   const [walletAddress, setWalletAddress] = useState<string | undefined>();
+  const [userToken, setUserToken] = useState<string | undefined>();
   const [currentClaimId, setCurrentClaimId] = useState<string | null>(null);
   const [claim, setClaim] = useState<Claim | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Mock wallet connection (will be replaced with Circle Wallets)
-  const handleConnectWallet = () => {
-    // For demo, use a mock address
-    setWalletAddress('0xABCDEF1234567890ABCDEF1234567890ABCDEF12');
+  // Handle wallet connection
+  const handleConnect = (address: string, token?: string) => {
+    setWalletAddress(address);
+    if (token) {
+      setUserToken(token);
+      // Store in localStorage for persistence
+      localStorage.setItem('circle_user_token', token);
+      localStorage.setItem('wallet_address', address);
+    }
   };
+
+  // Handle wallet disconnection
+  const handleDisconnect = () => {
+    setWalletAddress(undefined);
+    setUserToken(undefined);
+    localStorage.removeItem('circle_user_token');
+    localStorage.removeItem('wallet_address');
+  };
+
+  // Restore wallet from localStorage on mount
+  useEffect(() => {
+    const storedToken = localStorage.getItem('circle_user_token');
+    const storedAddress = localStorage.getItem('wallet_address');
+    if (storedToken && storedAddress) {
+      setUserToken(storedToken);
+      setWalletAddress(storedAddress);
+    }
+  }, []);
 
   // Fetch claim when ID changes
   useEffect(() => {
@@ -51,7 +75,9 @@ export default function ClaimantPage() {
     <div className="min-h-screen">
       <Navbar 
         walletAddress={walletAddress}
-        onConnectWallet={handleConnectWallet}
+        userToken={userToken}
+        onConnect={handleConnect}
+        onDisconnect={handleDisconnect}
       />
       
       <main className="pt-24 pb-12 px-4">

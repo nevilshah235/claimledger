@@ -1,60 +1,165 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Button, Modal } from './ui';
+import { api } from '@/lib/api';
 
 interface WalletConnectProps {
-  onConnect: (address: string) => void;
+  onConnect: (address: string, userToken?: string) => void;
   onDisconnect: () => void;
   address?: string;
+  userToken?: string;
 }
 
 /**
  * WalletConnect Component
  * 
- * This is a mock implementation for the demo.
- * In production, this would integrate with Circle Wallets SDK:
+ * Integrates with Circle Wallets SDK for user-controlled wallet authentication.
+ * Falls back to demo mode if Circle SDK is not available or configured.
  * 
- * ```typescript
- * import { W3SSdk } from '@circle-fin/w3s-pnp-web';
- * 
- * const sdk = new W3SSdk({
- *   appId: process.env.NEXT_PUBLIC_CIRCLE_APP_ID!,
- * });
- * 
- * await sdk.performLogin({
- *   deviceToken: 'your-device-token',
- * });
- * ```
- * 
+ * Uses Circle Wallets SDK: @circle-fin/w3s-pw-web-sdk
  * See: https://developers.circle.com/w3s/docs/web-sdk-ui-customizations
  */
-export function WalletConnect({ onConnect, onDisconnect, address }: WalletConnectProps) {
+export function WalletConnect({ onConnect, onDisconnect, address, userToken }: WalletConnectProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const sdkRef = useRef<any>(null);
 
-  const handleConnect = useCallback(async (type: 'circle' | 'demo') => {
+  // Initialize Circle SDK on mount (if available)
+  // Note: SDK is loaded dynamically at runtime to avoid build-time bundling issues
+  useEffect(() => {
+    const initSDK = async () => {
+      const appId = process.env.NEXT_PUBLIC_CIRCLE_APP_ID;
+      if (!appId) {
+        console.warn('NEXT_PUBLIC_CIRCLE_APP_ID not configured, Circle SDK disabled');
+        return;
+      }
+
+      // Only run on client side
+      if (typeof window === 'undefined') {
+        return;
+      }
+
+      // SDK will be loaded dynamically when needed, not at component mount
+      // This avoids build-time bundling issues
+      sdkRef.current = { appId, initialized: false };
+    };
+
+    initSDK();
+  }, [userToken]);
+
+  const handleCircleConnect = useCallback(async () => {
     setIsConnecting(true);
+    setError(null);
     
     try {
-      if (type === 'circle') {
-        // TODO: Implement real Circle Wallets SDK connection
-        // const sdk = new W3SSdk({ appId: process.env.NEXT_PUBLIC_CIRCLE_APP_ID! });
-        // const result = await sdk.performLogin({ ... });
-        // onConnect(result.address);
-        
-        // For now, use demo address
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        onConnect('0xCIRCLE00000000000000000000000000000000000');
-      } else {
-        // Demo mode - use mock address
-        await new Promise(resolve => setTimeout(resolve, 500));
-        onConnect('0xDEMO0000000000000000000000000000000000000');
+      const appId = process.env.NEXT_PUBLIC_CIRCLE_APP_ID;
+      if (!appId) {
+        throw new Error('NEXT_PUBLIC_CIRCLE_APP_ID not configured');
       }
-      
+
+      // Only run on client side
+      if (typeof window === 'undefined') {
+        throw new Error('Circle authentication must run in browser');
+      }
+
+      // Step 1: Initialize authentication with backend
+      const initResponse = await api.auth.initCircle();
+      const { user_id, user_token, challenge_id, app_id: backendAppId } = initResponse;
+
+      // Step 2: Dynamically load Circle SDK at runtime using Function constructor
+      // This prevents Next.js from analyzing the import at build time
+      let W3SSdk: any;
+      try {
+        // Use Function constructor to create a dynamic import that Next.js can't analyze
+        const importSDK = new Function('return import("@circle-fin/w3s-pw-web-sdk")');
+        const sdkModule = await importSDK();
+        W3SSdk = sdkModule.W3SSdk || sdkModule.default?.W3SSdk;
+        
+        if (!W3SSdk) {
+          throw new Error('W3SSdk not found in Circle SDK module');
+        }
+      } catch (importErr: any) {
+        console.error('Failed to load Circle SDK:', importErr);
+        throw new Error(`Circle SDK failed to load: ${importErr.message || 'Unknown error'}. Please check your environment configuration.`);
+      }
+
+      // Initialize SDK instance
+      const sdk = new W3SSdk({
+        configs: {
+          appSettings: { appId: backendAppId || appId },
+          authentication: {
+            userToken: user_token,
+            encryptionKey: undefined,
+          },
+          socialLoginConfig: {},
+        },
+        socialLoginCompleteCallback: (error: any, result: any) => {
+          if (error) {
+            console.error('Circle social login error:', error);
+          }
+        },
+      });
+
+      // Step 3: Execute challenge with Circle SDK
+      // This shows Circle's authentication UI
+      await new Promise<void>((resolve, reject) => {
+        try {
+          sdk.execute(
+            challenge_id,
+            (error: any, result: any) => {
+              if (error) {
+                reject(new Error(error.message || 'Circle authentication failed'));
+                return;
+              }
+
+              if (result && result.data && result.data.wallets && result.data.wallets.length > 0) {
+                // Step 4: Get wallet address from result
+                const walletAddress = result.data.wallets[0].address;
+                const circleWalletId = result.data.wallets[0].id;
+
+                // Step 5: Complete authentication with backend
+                api.auth.completeCircle({
+                  user_token: user_token,
+                  wallet_address: walletAddress,
+                  circle_wallet_id: circleWalletId,
+                }).then(() => {
+                  onConnect(walletAddress, user_token);
+                  setIsModalOpen(false);
+                  resolve();
+                }).catch((err) => {
+                  reject(err);
+                });
+              } else {
+                reject(new Error('No wallet found in authentication result'));
+              }
+            }
+          );
+        } catch (err: any) {
+          reject(new Error(err.message || 'Failed to execute Circle SDK'));
+        }
+      });
+    } catch (err: any) {
+      console.error('Circle wallet connection failed:', err);
+      setError(err.message || 'Failed to connect Circle wallet');
+    } finally {
+      setIsConnecting(false);
+    }
+  }, [onConnect]);
+
+  const handleDemoConnect = useCallback(async () => {
+    setIsConnecting(true);
+    setError(null);
+    
+    try {
+      // Demo mode - use mock address
+      await new Promise(resolve => setTimeout(resolve, 500));
+      onConnect('0xDEMO0000000000000000000000000000000000000');
       setIsModalOpen(false);
-    } catch (error) {
-      console.error('Wallet connection failed:', error);
+    } catch (err: any) {
+      console.error('Demo wallet connection failed:', err);
+      setError(err.message || 'Failed to connect demo wallet');
     } finally {
       setIsConnecting(false);
     }
@@ -63,6 +168,7 @@ export function WalletConnect({ onConnect, onDisconnect, address }: WalletConnec
   const handleDisconnect = useCallback(() => {
     onDisconnect();
     setIsModalOpen(false);
+    setError(null);
   }, [onDisconnect]);
 
   const truncateAddress = (addr: string) => {
@@ -92,7 +198,10 @@ export function WalletConnect({ onConnect, onDisconnect, address }: WalletConnec
         {/* Settings Modal */}
         <Modal
           isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
+          onClose={() => {
+            setIsModalOpen(false);
+            setError(null);
+          }}
           title="Wallet Settings"
           size="sm"
         >
@@ -101,6 +210,11 @@ export function WalletConnect({ onConnect, onDisconnect, address }: WalletConnec
               <p className="text-sm text-slate-400 mb-1">Connected Address</p>
               <p className="font-mono text-white break-all">{address}</p>
             </div>
+            {error && (
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+                <p className="text-sm text-red-400">{error}</p>
+              </div>
+            )}
             <Button
               variant="secondary"
               className="w-full"
@@ -113,6 +227,8 @@ export function WalletConnect({ onConnect, onDisconnect, address }: WalletConnec
       </div>
     );
   }
+
+  const isCircleAvailable = process.env.NEXT_PUBLIC_CIRCLE_APP_ID !== undefined;
 
   return (
     <>
@@ -127,7 +243,10 @@ export function WalletConnect({ onConnect, onDisconnect, address }: WalletConnec
       {/* Connect Modal */}
       <Modal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        onClose={() => {
+          setIsModalOpen(false);
+          setError(null);
+        }}
         title="Connect Wallet"
         size="sm"
       >
@@ -137,27 +256,43 @@ export function WalletConnect({ onConnect, onDisconnect, address }: WalletConnec
           </p>
 
           {/* Circle Wallets Option */}
-          <button
-            onClick={() => handleConnect('circle')}
-            disabled={isConnecting}
-            className="w-full p-4 rounded-xl border border-white/10 hover:border-cyan-500/50 hover:bg-white/5 transition-all text-left disabled:opacity-50"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
-                <svg className="w-5 h-5 text-blue-400" viewBox="0 0 24 24" fill="currentColor">
-                  <circle cx="12" cy="12" r="10" />
-                </svg>
+          {isCircleAvailable ? (
+            <button
+              onClick={handleCircleConnect}
+              disabled={isConnecting}
+              className="w-full p-4 rounded-xl border border-white/10 hover:border-cyan-500/50 hover:bg-white/5 transition-all text-left disabled:opacity-50"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-blue-400" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="12" r="10" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="font-medium text-white">Circle Wallets</p>
+                  <p className="text-xs text-slate-400">MPC-powered, user-controlled wallet</p>
+                </div>
               </div>
-              <div>
-                <p className="font-medium text-white">Circle Wallets</p>
-                <p className="text-xs text-slate-400">MPC-powered, user-controlled wallet</p>
+            </button>
+          ) : (
+            <div className="w-full p-4 rounded-xl border border-slate-600/50 bg-slate-800/30 opacity-50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-slate-600/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-slate-500" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="12" r="10" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="font-medium text-slate-400">Circle Wallets</p>
+                  <p className="text-xs text-slate-500">Not configured (NEXT_PUBLIC_CIRCLE_APP_ID missing)</p>
+                </div>
               </div>
             </div>
-          </button>
+          )}
 
           {/* Demo Mode Option */}
           <button
-            onClick={() => handleConnect('demo')}
+            onClick={handleDemoConnect}
             disabled={isConnecting}
             className="w-full p-4 rounded-xl border border-white/10 hover:border-emerald-500/50 hover:bg-white/5 transition-all text-left disabled:opacity-50"
           >
@@ -175,6 +310,14 @@ export function WalletConnect({ onConnect, onDisconnect, address }: WalletConnec
             </div>
           </button>
 
+          {/* Error Display */}
+          {error && (
+            <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+              <p className="text-sm text-red-400">{error}</p>
+            </div>
+          )}
+
+          {/* Loading State */}
           {isConnecting && (
             <div className="flex items-center justify-center gap-2 py-2">
               <svg className="w-5 h-5 text-cyan-400 animate-spin" fill="none" viewBox="0 0 24 24">

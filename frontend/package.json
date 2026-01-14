@@ -14,7 +14,8 @@
     "react-dom": "^18.2.0",
     "@tanstack/react-query": "^5.14.2",
     "wagmi": "^2.4.0",
-    "viem": "^2.0.0"
+    "viem": "^2.0.0",
+    "@circle-fin/w3s-pw-web-sdk": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^20",

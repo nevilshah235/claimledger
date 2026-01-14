@@ -56,6 +56,7 @@ interface Stats {
 
 export default function InsurerPage() {
   const [walletAddress, setWalletAddress] = useState<string | undefined>();
+  const [userToken, setUserToken] = useState<string | undefined>();
   const [claims, setClaims] = useState<Claim[]>(DEMO_CLAIMS);
   const [stats, setStats] = useState<Stats>({
     totalClaims: 3,
@@ -64,10 +65,33 @@ export default function InsurerPage() {
     totalSettled: 750,
   });
 
-  // Mock wallet connection
-  const handleConnectWallet = () => {
-    setWalletAddress('0xINSURER0000000000000000000000000000000000');
+  // Handle wallet connection
+  const handleConnect = (address: string, token?: string) => {
+    setWalletAddress(address);
+    if (token) {
+      setUserToken(token);
+      localStorage.setItem('circle_user_token', token);
+      localStorage.setItem('wallet_address', address);
+    }
   };
+
+  // Handle wallet disconnection
+  const handleDisconnect = () => {
+    setWalletAddress(undefined);
+    setUserToken(undefined);
+    localStorage.removeItem('circle_user_token');
+    localStorage.removeItem('wallet_address');
+  };
+
+  // Restore wallet from localStorage on mount
+  useEffect(() => {
+    const storedToken = localStorage.getItem('circle_user_token');
+    const storedAddress = localStorage.getItem('wallet_address');
+    if (storedToken && storedAddress) {
+      setUserToken(storedToken);
+      setWalletAddress(storedAddress);
+    }
+  }, []);
 
   // Calculate stats from claims
   useEffect(() => {
@@ -106,7 +130,9 @@ export default function InsurerPage() {
     <div className="min-h-screen">
       <Navbar 
         walletAddress={walletAddress}
-        onConnectWallet={handleConnectWallet}
+        userToken={userToken}
+        onConnect={handleConnect}
+        onDisconnect={handleDisconnect}
       />
       
       <main className="pt-24 pb-12 px-4">

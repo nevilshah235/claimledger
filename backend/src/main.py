@@ -19,6 +19,7 @@ from .api.claims import router as claims_router
 from .api.verifier import router as verifier_router
 from .api.agent import router as agent_router
 from .api.blockchain import router as blockchain_router
+from .api.auth import router as auth_router
 
 
 @asynccontextmanager
@@ -65,6 +66,7 @@ app.include_router(claims_router)
 app.include_router(verifier_router)
 app.include_router(agent_router)
 app.include_router(blockchain_router)
+app.include_router(auth_router)
 
 
 @app.get("/")
@@ -79,7 +81,8 @@ async def root():
             "claims": "/claims",
             "verifier": "/verifier",
             "agent": "/agent",
-            "blockchain": "/blockchain"
+            "blockchain": "/blockchain",
+            "auth": "/auth"
         }
     }
 

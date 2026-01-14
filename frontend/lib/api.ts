@@ -118,6 +118,56 @@ export const api = {
     },
   },
 
+  // Authentication (Circle Wallets)
+  auth: {
+    // Initialize Circle authentication
+    initCircle: async (userId?: string): Promise<{
+      user_id: string;
+      user_token: string;
+      challenge_id: string;
+      app_id: string;
+    }> => {
+      return fetchAPI('/auth/circle/init', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ user_id: userId || null }),
+      });
+    },
+
+    // Complete Circle authentication
+    completeCircle: async (data: {
+      user_token: string;
+      wallet_address: string;
+      circle_wallet_id?: string;
+    }): Promise<{
+      success: boolean;
+      wallet_address: string;
+      user_id: string;
+    }> => {
+      return fetchAPI('/auth/circle/complete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+    },
+
+    // Get wallet address for authenticated user
+    getWallet: async (userToken: string): Promise<{
+      wallet_address: string;
+      user_id: string;
+    }> => {
+      return fetchAPI('/auth/circle/wallet', {
+        headers: {
+          'X-User-Token': userToken,
+        },
+      });
+    },
+  },
+
   // Verifiers (x402)
   verifier: {
     document: async (claimId: string, documentPath: string, receipt?: string) => {
@@ -168,6 +218,6 @@ export const api = {
 };
 
 // Export individual functions for convenience
-export const { health, info, claims, agent, blockchain, verifier } = api;
+export const { health, info, claims, agent, blockchain, verifier, auth } = api;
 
 export default api;
