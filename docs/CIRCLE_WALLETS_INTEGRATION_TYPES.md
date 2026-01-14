@@ -2,25 +2,83 @@
 
 ## Which Type Are We Using?
 
-**✅ We are using: User-Controlled Wallets**
+**✅ We are using: Developer-Controlled Wallets**
 
 This is confirmed by:
-- Frontend SDK: `@circle-fin/w3s-pw-web-sdk` (Programmable Wallets SDK)
-- Code comments: "user-controlled wallet authentication"
-- Component description: "MPC-powered, user-controlled wallet"
-- Backend service: "Uses Circle Wallets API for user-controlled wallets"
+- Backend service: `DeveloperWalletsService` (Developer-Controlled Wallets API)
+- No frontend Circle SDK required
+- Wallets created automatically on user registration
+- Entity secret encryption for wallet operations
+- Backend-only wallet management
 
 ---
 
 ## The Three Integration Types
 
-### 1. User-Controlled Wallets ✅ (Our Choice)
+### 1. Developer-Controlled Wallets ✅ (Our Choice)
+
+**What it is:**
+- **Backend manages wallets on behalf of users**
+- Developer holds the Entity Secret (master key)
+- Backend signs transactions programmatically
+- Users don't interact with private keys directly
+- Simplified UX for end users
+
+**How it works:**
+1. User registers via our auth system (email + password)
+2. Backend automatically creates wallet via Circle API
+3. Backend signs transactions programmatically
+4. Users see wallet address but don't manage keys
+
+**Key Identifiers:**
+- **Entity Secret** - Master key for programmatic control (32 bytes)
+- **API Key** - Required for backend API calls
+- **Wallet IDs** - Managed by backend
+
+**Ideal for:**
+- ✅ Mainstream users unfamiliar with crypto
+- ✅ Simplified UX (no wallet education needed)
+- ✅ Full programmatic control
+- ✅ Our use case: ClaimLedger (backend manages wallets automatically)
+
+**Our Implementation:**
+```python
+# Backend: Developer creates wallet on user registration
+wallet_data = await wallet_service.create_wallet(
+    blockchains=["ARC"],
+    account_type="SCA"
+)
+
+# Wallet created automatically, address stored in database
+user_wallet = UserWallet(
+    user_id=user.id,
+    wallet_address=wallet_data["address"],
+    circle_wallet_id=wallet_data["wallet_id"]
+)
+```
+
+**Pros:**
+- ✅ Simpler UX for end users
+- ✅ No wallet education needed
+- ✅ Full programmatic control
+- ✅ Easier onboarding
+- ✅ Works without frontend Circle SDK
+
+**Cons:**
+- ⚠️ Centralized custody (backend holds Entity Secret)
+- ⚠️ Regulatory complexity (developer is custodian)
+- ⚠️ Security risk (if backend is compromised)
+- ⚠️ Users can't recover wallets independently
+
+---
+
+### 2. User-Controlled Wallets ❌ (Not Using)
 
 **What it is:**
 - End users maintain direct control over their wallet's private keys
 - Users sign transactions themselves through Circle's authentication UI
-- Uses **MPC (Multi-Party Computation)** technology - keys are split and never fully stored in one place
-- Circle provides the wallet infrastructure, but users control access
+- Uses **MPC (Multi-Party Computation)** technology
+- Requires frontend Circle SDK
 
 **How it works:**
 1. User authenticates via Circle SDK (email, social login, etc.)
@@ -37,14 +95,12 @@ This is confirmed by:
 - ✅ Crypto-native users comfortable with self-custody
 - ✅ Applications where users need direct control over funds
 - ✅ Decentralized applications (dApps)
-- ✅ Our use case: ClaimLedger (claimants/insurers manage their own funds)
 
-**Our Implementation:**
+**Example Use Case:**
 ```typescript
 // Frontend: User authenticates and signs
 const sdk = new W3SSdk({
-  appSettings: { appId: CIRCLE_APP_ID },
-  authentication: { userToken: user_token }
+  appSettings: { appId: CIRCLE_APP_ID }
 });
 
 // User signs transactions through Circle UI
@@ -55,65 +111,13 @@ sdk.execute(challenge_id, callback);
 - ✅ True user ownership and control
 - ✅ More decentralized
 - ✅ Users can recover wallets independently
-- ✅ Better for regulatory compliance (users control their keys)
-- ✅ No custodial risk for developers
+- ✅ Better for regulatory compliance
 
 **Cons:**
-- ⚠️ Users must understand wallet concepts
-- ⚠️ More complex UX (authentication flows)
-- ⚠️ Users responsible for security
-
----
-
-### 2. Developer-Controlled Wallets ❌ (Not Using)
-
-**What it is:**
-- **You (the developer) act as custodian**
-- Your backend holds the private keys (via Entity Secret)
-- You sign transactions programmatically on behalf of users
-- Users never directly interact with private keys
-
-**How it works:**
-1. Developer creates wallets via API using Entity Secret
-2. Backend signs all transactions programmatically
-3. Users don't see signing prompts or wallet UI
-4. Developer has full control over user funds
-
-**Key Identifiers:**
-- **Entity Secret** - Master key for programmatic control
-- **API Key** - For backend API calls
-- **Wallet IDs** - Managed by backend
-
-**Ideal for:**
-- ✅ Mainstream users unfamiliar with crypto
-- ✅ Traditional fintech applications
-- ✅ Applications where you manage funds for users
-- ✅ Simplified UX (no wallet concepts)
-
-**Example Use Case:**
-```python
-# Backend: Developer signs on behalf of user
-wallet = circle_api.create_wallet(entity_secret=ENTITY_SECRET)
-transaction = circle_api.sign_transaction(
-    wallet_id=wallet.id,
-    entity_secret=ENTITY_SECRET,
-    to_address="0x...",
-    amount="1000000"  # USDC
-)
-```
-
-**Pros:**
-- ✅ Simpler UX for end users
-- ✅ No wallet education needed
-- ✅ Full programmatic control
-- ✅ Easier onboarding
-
-**Cons:**
-- ❌ Centralized custody (you hold keys)
-- ❌ Regulatory complexity (you're a custodian)
-- ❌ Security risk (if your backend is compromised)
-- ❌ Users can't recover wallets independently
-- ❌ Not suitable for decentralized applications
+- ❌ Requires frontend Circle SDK (build issues with Next.js)
+- ❌ Users must understand wallet concepts
+- ❌ More complex UX (authentication flows)
+- ❌ Users responsible for security
 
 ---
 
@@ -165,145 +169,161 @@ transaction = circle_api.sign_transaction(
 
 ## Comparison Table
 
-| Feature | User-Controlled ✅ | Developer-Controlled | Modular |
-|---------|-------------------|---------------------|---------|
-| **Who controls keys?** | End user | Developer | End user (via smart contract) |
-| **Transaction signing** | User signs | Developer signs | User signs (via modules) |
-| **Custody model** | Non-custodial | Custodial | Non-custodial |
-| **UX complexity** | Medium | Simple | Medium-High |
-| **User education needed** | Yes | No | Yes |
-| **Regulatory complexity** | Lower | Higher (custodian) | Lower |
+| Feature | Developer-Controlled ✅ | User-Controlled | Modular |
+|---------|----------------------|----------------|---------|
+| **Who controls keys?** | Developer (backend) | End user | End user (via smart contract) |
+| **Transaction signing** | Developer signs | User signs | User signs (via modules) |
+| **Custody model** | Custodial | Non-custodial | Non-custodial |
+| **UX complexity** | Simple | Medium | Medium-High |
+| **User education needed** | No | Yes | Yes |
+| **Regulatory complexity** | Higher (custodian) | Lower | Lower |
 | **Customization** | Limited | Limited | High (modules) |
-| **Best for** | dApps, DeFi | Fintech, mainstream | Advanced use cases |
-| **SDK Package** | `@circle-fin/w3s-pw-web-sdk` | Backend API only | Modular SDK |
-| **Key Identifier** | App ID | Entity Secret | Client Key / Kit Key |
+| **Best for** | Fintech, mainstream | dApps, DeFi | Advanced use cases |
+| **SDK Package** | Backend API only | `@circle-fin/w3s-pw-web-sdk` | Modular SDK |
+| **Key Identifier** | Entity Secret | App ID | Client Key / Kit Key |
+| **Frontend SDK** | ❌ Not needed | ✅ Required | ✅ Required |
 
 ---
 
-## Why User-Controlled for ClaimLedger?
+## Why Developer-Controlled for ClaimLedger?
 
-### 1. **Decentralized Nature**
-- ClaimLedger is built on Arc blockchain
-- Users (claimants/insurers) should control their funds
-- Aligns with Web3 principles
+### 1. **Simplified UX**
+- No frontend Circle SDK needed (avoids Next.js build issues)
+- Users don't need to understand wallets
+- Faster onboarding
 
-### 2. **Regulatory Clarity**
-- We're not a custodian
-- Users own their wallets
-- Clearer compliance position
+### 2. **Backend-Only Integration**
+- No frontend SDK dependencies
+- Cleaner architecture
+- Easier to maintain
 
-### 3. **User Autonomy**
-- Claimants can manage their own USDC
-- Insurers control settlement funds
-- No dependency on our backend for wallet access
+### 3. **Automatic Wallet Provision**
+- Wallets created automatically on registration
+- No user interaction needed
+- Seamless experience
 
-### 4. **Security Model**
-- MPC technology (keys never fully exposed)
-- Users can recover wallets
-- No single point of failure
+### 4. **Testnet Mode Support**
+- Works without Circle credentials (mock wallets)
+- Full testing capability
+- Easy development
 
 ### 5. **Hackathon Demo**
-- Shows real Web3 wallet integration
-- Demonstrates user-controlled funds
-- More impressive for judges
+- Shows backend wallet management
+- Demonstrates automatic provisioning
+- Clean, working demo
 
 ---
 
-## What We Need for User-Controlled Wallets
+## What We Need for Developer-Controlled Wallets
 
 ### Required Credentials:
 
-1. **App ID** (`CIRCLE_APP_ID`)
-   - Found in: Circle Console → Wallets → User Controlled → Configurator
-   - Used by: Frontend SDK initialization
-   - Format: UUID string
-
-2. **API Key** (`CIRCLE_WALLETS_API_KEY`)
+1. **API Key** (`CIRCLE_WALLETS_API_KEY`)
    - Found in: Circle Console → API & Client Keys
    - Used by: Backend API calls
    - Format: `TEST_API_KEY:...` (Sandbox) or `LIVE_API_KEY:...` (Production)
 
+2. **Entity Secret** (`CIRCLE_ENTITY_SECRET`)
+   - Generated: 32-byte random secret (64 hex characters)
+   - Registered: With Circle API (automatic on first wallet creation)
+   - Used by: Backend for wallet operations
+   - Format: 64-character hexadecimal string
+
 ### Not Needed:
 
-- ❌ **Entity Secret** - Only for Developer-Controlled
+- ❌ **App ID** - Only for User-Controlled (frontend SDK)
 - ❌ **Client Key** - Only for Modular Wallets
 - ❌ **Kit Key** - Only for Circle Kits
+- ❌ **Frontend SDK** - Not needed (backend-only)
 
 ---
 
 ## Implementation Details
 
-### Frontend Flow (User-Controlled):
-
-```typescript
-// 1. Initialize SDK with App ID
-const sdk = new W3SSdk({
-  appSettings: { appId: CIRCLE_APP_ID }
-});
-
-// 2. User authenticates (Circle shows UI)
-sdk.execute(challenge_id, (error, result) => {
-  // 3. User signs challenge
-  // 4. Get wallet address from result
-  const walletAddress = result.data.wallets[0].address;
-  
-  // 5. User now controls this wallet
-});
-```
-
-### Backend Flow (User-Controlled):
+### Backend Flow (Developer-Controlled):
 
 ```python
-# 1. Create/retrieve user
-user = await circle_service.create_user(user_id="user@example.com")
+# 1. User registers via our auth system
+user = User(email="user@example.com", password_hash=..., role="claimant")
+db.add(user)
 
-# 2. Initialize authentication challenge
-challenge = await circle_service.initialize_user(user_id=user["userId"])
+# 2. Backend automatically creates wallet
+wallet_data = await wallet_service.create_wallet(
+    blockchains=["ARC"],
+    account_type="SCA"
+)
 
-# 3. Return challenge to frontend
-# Frontend SDK handles user authentication
+# 3. Store wallet mapping
+user_wallet = UserWallet(
+    user_id=user.id,
+    wallet_address=wallet_data["address"],
+    circle_wallet_id=wallet_data["wallet_id"]
+)
+db.add(user_wallet)
 
-# 4. After authentication, get user wallets
-wallets = await circle_service.get_user_wallets(user_id=user["userId"])
+# 4. User gets wallet address automatically
+# No frontend SDK needed!
 ```
 
-### Key Difference from Developer-Controlled:
+### Frontend Flow (Developer-Controlled):
 
-**User-Controlled:**
-- ✅ User signs transactions through Circle UI
-- ✅ User controls private keys (via MPC)
-- ✅ Backend only facilitates, doesn't control
+```typescript
+// 1. User registers/logs in via our auth
+const response = await api.auth.register({
+  email: "user@example.com",
+  password: "password123",
+  role: "claimant"
+});
+
+// 2. Wallet address returned automatically
+const walletAddress = response.wallet_address;
+
+// 3. Display wallet info
+<WalletDisplay walletAddress={walletAddress} />
+
+// No Circle SDK needed!
+```
+
+### Key Difference from User-Controlled:
 
 **Developer-Controlled:**
-- ❌ Backend signs transactions programmatically
-- ❌ Backend controls private keys
-- ❌ User never sees signing UI
+- ✅ Backend signs transactions programmatically
+- ✅ Backend controls Entity Secret
+- ✅ No frontend SDK required
+- ✅ Automatic wallet creation
+
+**User-Controlled:**
+- ❌ Requires frontend Circle SDK
+- ❌ User signs transactions through Circle UI
+- ❌ User controls private keys (via MPC)
+- ❌ More complex setup
 
 ---
 
 ## Summary
 
-**We chose User-Controlled Wallets because:**
-1. ✅ Aligns with Web3/decentralized principles
-2. ✅ Users maintain control over their funds
-3. ✅ Better for regulatory compliance
-4. ✅ More impressive for hackathon demo
-5. ✅ Suitable for crypto-native users (claimants/insurers)
+**We chose Developer-Controlled Wallets because:**
+1. ✅ No frontend Circle SDK needed (avoids Next.js build issues)
+2. ✅ Simplified UX for end users
+3. ✅ Automatic wallet provisioning
+4. ✅ Backend-only integration (cleaner architecture)
+5. ✅ Testnet mode support (works without Circle credentials)
 
 **What this means:**
-- Users authenticate through Circle's UI
-- Users sign their own transactions
-- We provide the infrastructure, users control the funds
-- Perfect for a decentralized insurance claims platform
+- Backend manages wallets automatically
+- Wallets created on user registration
+- No frontend SDK dependencies
+- Perfect for streamlined insurance claims platform
 
 ---
 
 ## Next Steps
 
-1. ✅ Get **App ID** from Circle Console (Wallets → User Controlled → Configurator)
-2. ✅ Get **API Key** from Circle Console (API & Client Keys)
+1. ✅ Get **API Key** from Circle Console (API & Client Keys)
+2. ✅ Generate **Entity Secret** (32 bytes, 64 hex characters)
 3. ✅ Add to environment variables
-4. ✅ Test authentication flow
-5. ✅ Verify users can sign transactions
+4. ✅ Register entity secret (automatic on first wallet creation)
+5. ✅ Test wallet creation on user registration
 
-See `docs/CIRCLE_API_KEYS_SETUP.md` for detailed setup instructions.
+See `docs/ENVIRONMENT_VARIABLES.md` for detailed setup instructions.
+See `docs/CIRCLE_ENTITY_SECRET_SETUP.md` for entity secret registration.

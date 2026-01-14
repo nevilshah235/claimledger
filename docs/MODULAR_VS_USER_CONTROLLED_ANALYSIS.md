@@ -1,5 +1,20 @@
 # Modular Wallets vs User-Controlled: Decision Analysis
 
+> **⚠️ HISTORICAL DOCUMENT: This analysis was for User-Controlled Wallets.**
+> 
+> **Current Implementation:** We are using **Developer-Controlled Wallets** (backend-only).
+> 
+> **Why the change:**
+> - Frontend Circle SDK had build issues with Next.js 14
+> - Developer-Controlled avoids frontend SDK entirely
+> - Simpler architecture and better for hackathon demo
+> 
+> **See:** `docs/CIRCLE_WALLETS_INTEGRATION_TYPES.md` for current implementation details.
+
+---
+
+# Modular Wallets vs User-Controlled: Decision Analysis (Historical)
+
 ## Quick Answer
 
 **Recommendation: Stick with User-Controlled for the hackathon demo**
@@ -285,9 +300,9 @@
 
 ---
 
-## Final Verdict
+## Final Verdict (Historical)
 
-**For Hackathon: User-Controlled ✅**
+**For Hackathon: User-Controlled ✅** (This was the original decision)
 
 **Why:**
 - ✅ Already done
@@ -302,10 +317,12 @@
 - ⚠️ Higher risk of demo failures
 - ⚠️ Features we don't need for demo
 
-**Best Strategy:**
-1. Ship hackathon demo with User-Controlled ✅
-2. Win the hackathon 🏆
-3. Consider Modular for production later
+**Actual Outcome:**
+1. User-Controlled had frontend SDK build issues with Next.js 14
+2. Switched to **Developer-Controlled Wallets** (backend-only)
+3. No frontend SDK needed - solves build issues
+4. Simpler architecture - better for hackathon demo
+5. Testnet mode works without Circle credentials
 
 ---
 
