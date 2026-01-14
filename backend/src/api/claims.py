@@ -8,12 +8,15 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
+from fastapi import Depends as FastAPIDepends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, status
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Claim, Evidence
+from ..models import Claim, Evidence, User, UserWallet
+from ..api.auth import get_current_user, security
 
 router = APIRouter(prefix="/claims", tags=["claims"])
 
@@ -43,25 +46,41 @@ class ClaimCreateResponse(BaseModel):
 
 @router.post("", response_model=ClaimCreateResponse)
 async def create_claim(
-    claimant_address: str = Form(...),
     claim_amount: float = Form(...),
     files: List[UploadFile] = File(default=[]),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Submit a new insurance claim.
     
-    - **claimant_address**: Wallet address of the claimant
+    Requires authentication. Uses authenticated user's wallet address as claimant.
+    
     - **claim_amount**: Requested claim amount in USDC
     - **files**: Evidence files (images, documents)
     
     Returns claim_id and initial status.
     """
+    # Verify user is a claimant
+    if current_user.role != "claimant":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only claimants can submit claims"
+        )
+    
+    # Get user's wallet address
+    user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+    if not user_wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wallet not found for user. Please contact support."
+        )
+    
     # Create new claim
     claim_id = str(uuid.uuid4())
     claim = Claim(
         id=claim_id,
-        claimant_address=claimant_address,
+        claimant_address=user_wallet.wallet_address,
         claim_amount=Decimal(str(claim_amount)),
         status="SUBMITTED",
         processing_costs=Decimal("0"),
@@ -97,13 +116,69 @@ async def create_claim(
     )
 
 
+@router.get("", response_model=List[ClaimResponse])
+async def list_claims(
+    db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+):
+    """
+    List all claims.
+    
+    - Claimants: See only their own claims
+    - Insurers: See all claims
+    - Unauthenticated: Returns empty list
+    """
+    current_user = None
+    if credentials:
+        try:
+            current_user = get_current_user(credentials, db)
+        except HTTPException:
+            pass  # Not authenticated, return empty list
+    
+    if not current_user:
+        return []
+    
+    if current_user.role == "claimant":
+        # Claimants see only their own claims
+        user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+        if not user_wallet:
+            return []
+        
+        claims = db.query(Claim).filter(
+            Claim.claimant_address == user_wallet.wallet_address
+        ).order_by(Claim.created_at.desc()).all()
+    else:
+        # Insurers see all claims
+        claims = db.query(Claim).order_by(Claim.created_at.desc()).all()
+    
+    return [
+        ClaimResponse(
+            id=str(claim.id),
+            claimant_address=claim.claimant_address,
+            claim_amount=float(claim.claim_amount),
+            status=claim.status,
+            decision=claim.decision,
+            confidence=float(claim.confidence) if claim.confidence else None,
+            approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
+            processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
+            tx_hash=claim.tx_hash,
+            created_at=claim.created_at
+        )
+        for claim in claims
+    ]
+
+
 @router.get("/{claim_id}", response_model=ClaimResponse)
 async def get_claim(
     claim_id: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ):
     """
     Get claim status and details.
+    
+    - Claimants: Can only view their own claims
+    - Insurers: Can view any claim
     
     Returns:
     - status: SUBMITTED, EVALUATING, APPROVED, SETTLED, REJECTED
@@ -123,6 +198,22 @@ async def get_claim(
     
     if not claim:
         raise HTTPException(status_code=404, detail="Claim not found")
+    
+    # Check authorization (optional - allow unauthenticated viewing for demo)
+    current_user = None
+    if credentials:
+        try:
+            current_user = get_current_user(credentials, db)
+            if current_user.role == "claimant":
+                # Claimants can only view their own claims
+                user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+                if user_wallet and claim.claimant_address != user_wallet.wallet_address:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You can only view your own claims"
+                    )
+        except HTTPException:
+            pass  # Allow unauthenticated viewing for demo
     
     return ClaimResponse(
         id=str(claim.id),

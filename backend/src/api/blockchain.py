@@ -11,12 +11,13 @@ import os
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Claim
+from ..models import Claim, User
+from ..api.auth import get_current_user
 
 router = APIRouter(prefix="/blockchain", tags=["blockchain"])
 
@@ -45,19 +46,29 @@ class SettlementResponse(BaseModel):
 async def settle_claim(
     claim_id: str,
     request: SettlementRequest = SettlementRequest(),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Settle an approved claim by transferring USDC on Arc.
     
     Calls ClaimEscrow.approveClaim() to release escrowed USDC to claimant.
     
+    Requires authentication as insurer.
+    
     Requirements:
+    - User must be an insurer
     - Claim must be in APPROVED status
     - approved_amount must be set
     
     Returns transaction hash for verification on Arc explorer.
     """
+    # Verify user is an insurer
+    if current_user.role != "insurer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only insurers can settle claims"
+        )
     # Validate UUID format
     try:
         uuid.UUID(claim_id)
