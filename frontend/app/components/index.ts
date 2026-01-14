@@ -8,3 +8,5 @@ export { ClaimStatus } from './ClaimStatus';
 export { VerificationSteps } from './VerificationSteps';
 export { SettlementCard } from './SettlementCard';
 export { WalletConnect } from './WalletConnect';
+export { WalletDisplay } from './WalletDisplay';
+export { AuthModal } from './AuthModal';

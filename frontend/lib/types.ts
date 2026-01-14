@@ -79,3 +79,46 @@ export interface ApiInfo {
   docs: string;
   endpoints: Record<string, string>;
 }
+
+// Authentication Types
+export interface RegisterRequest {
+  email: string;
+  password: string;
+  role: 'claimant' | 'insurer';
+}
+
+export interface RegisterResponse {
+  user_id: string;
+  email: string;
+  role: string;
+  wallet_address: string;
+  access_token: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  user_id: string;
+  email: string;
+  role: string;
+  wallet_address: string | null;
+  access_token: string;
+}
+
+export interface UserInfo {
+  user_id: string;
+  email: string;
+  role: string;
+  wallet_address: string | null;
+}
+
+export interface WalletInfo {
+  wallet_address: string;
+  circle_wallet_id: string;
+  wallet_set_id: string | null;
+  blockchain: string | null;
+  balance: any | null;
+}

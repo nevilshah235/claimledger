@@ -32,10 +32,7 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
     e.preventDefault();
     setError(null);
 
-    if (!walletAddress) {
-      setError('Please connect your wallet first');
-      return;
-    }
+    // Wallet address is automatically used from authenticated user
 
     if (!amount || parseFloat(amount) <= 0) {
       setError('Please enter a valid claim amount');
@@ -46,7 +43,6 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
 
     try {
       const result = await api.claims.create({
-        claimant_address: walletAddress,
         claim_amount: parseFloat(amount),
         files: files.length > 0 ? files : undefined,
       });

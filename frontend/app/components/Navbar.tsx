@@ -6,12 +6,12 @@ import { WalletConnect } from './WalletConnect';
 
 interface NavbarProps {
   walletAddress?: string;
-  userToken?: string;
-  onConnect: (address: string, userToken?: string) => void;
+  role?: string;
+  onConnect: (address: string, role: string) => void;
   onDisconnect: () => void;
 }
 
-export function Navbar({ walletAddress, userToken, onConnect, onDisconnect }: NavbarProps) {
+export function Navbar({ walletAddress, role, onConnect, onDisconnect }: NavbarProps) {
   const pathname = usePathname();
 
   const isActive = (path: string) => pathname === path;
@@ -63,7 +63,7 @@ export function Navbar({ walletAddress, userToken, onConnect, onDisconnect }: Na
             <div className="flex items-center gap-3">
               <WalletConnect
                 address={walletAddress}
-                userToken={userToken}
+                role={role}
                 onConnect={onConnect}
                 onDisconnect={onDisconnect}
               />

@@ -56,41 +56,85 @@ interface Stats {
 
 export default function InsurerPage() {
   const [walletAddress, setWalletAddress] = useState<string | undefined>();
-  const [userToken, setUserToken] = useState<string | undefined>();
-  const [claims, setClaims] = useState<Claim[]>(DEMO_CLAIMS);
+  const [userRole, setUserRole] = useState<string | undefined>();
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState<Stats>({
-    totalClaims: 3,
-    approved: 1,
-    settled: 1,
-    totalSettled: 750,
+    totalClaims: 0,
+    approved: 0,
+    settled: 0,
+    totalSettled: 0,
   });
 
-  // Handle wallet connection
-  const handleConnect = (address: string, token?: string) => {
-    setWalletAddress(address);
-    if (token) {
-      setUserToken(token);
-      localStorage.setItem('circle_user_token', token);
-      localStorage.setItem('wallet_address', address);
+  // Load claims on mount
+  useEffect(() => {
+    loadClaims();
+  }, []);
+
+  const loadClaims = async () => {
+    setLoading(true);
+    try {
+      const claimsData = await api.claims.list();
+      setClaims(claimsData);
+      
+      // Calculate stats
+      const approved = claimsData.filter(c => c.status === 'APPROVED' || c.status === 'SETTLED').length;
+      const settled = claimsData.filter(c => c.status === 'SETTLED').length;
+      const totalSettled = claimsData
+        .filter(c => c.status === 'SETTLED' && c.approved_amount)
+        .reduce((sum, c) => sum + (c.approved_amount || 0), 0);
+      
+      setStats({
+        totalClaims: claimsData.length,
+        approved,
+        settled,
+        totalSettled,
+      });
+    } catch (err) {
+      console.error('Failed to load claims:', err);
+      // Fallback to demo data if not authenticated
+      setClaims(DEMO_CLAIMS);
+      setStats({
+        totalClaims: 3,
+        approved: 1,
+        settled: 1,
+        totalSettled: 750,
+      });
+    } finally {
+      setLoading(false);
     }
+  };
+
+  // Handle wallet connection
+  const handleConnect = (address: string, role: string) => {
+    setWalletAddress(address);
+    setUserRole(role);
+    loadClaims(); // Reload claims after login
   };
 
   // Handle wallet disconnection
   const handleDisconnect = () => {
     setWalletAddress(undefined);
-    setUserToken(undefined);
-    localStorage.removeItem('circle_user_token');
-    localStorage.removeItem('wallet_address');
+    setUserRole(undefined);
+    api.auth.logout();
+    setClaims(DEMO_CLAIMS); // Reset to demo data
   };
 
-  // Restore wallet from localStorage on mount
+  // Restore wallet from auth on mount
   useEffect(() => {
-    const storedToken = localStorage.getItem('circle_user_token');
-    const storedAddress = localStorage.getItem('wallet_address');
-    if (storedToken && storedAddress) {
-      setUserToken(storedToken);
-      setWalletAddress(storedAddress);
-    }
+    const loadUserInfo = async () => {
+      try {
+        const userInfo = await api.auth.me();
+        if (userInfo.wallet_address) {
+          setWalletAddress(userInfo.wallet_address);
+          setUserRole(userInfo.role);
+        }
+      } catch (err) {
+        // Not logged in
+        api.auth.logout();
+      }
+    };
+    loadUserInfo();
   }, []);
 
   // Calculate stats from claims
@@ -128,11 +172,11 @@ export default function InsurerPage() {
 
   return (
     <div className="min-h-screen">
-      <Navbar 
-        walletAddress={walletAddress}
-        userToken={userToken}
-        onConnect={handleConnect}
-        onDisconnect={handleDisconnect}
+        <Navbar 
+          walletAddress={walletAddress}
+          role={userRole}
+          onConnect={handleConnect}
+          onDisconnect={handleDisconnect}
       />
       
       <main className="pt-24 pb-12 px-4">

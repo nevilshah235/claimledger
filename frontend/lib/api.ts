@@ -5,32 +5,62 @@ import {
   SettlementResult,
   ApiError,
   HealthResponse,
-  ApiInfo
+  ApiInfo,
+  RegisterRequest,
+  RegisterResponse,
+  LoginRequest,
+  LoginResponse,
+  UserInfo,
+  WalletInfo
 } from './types';
 
 // API Configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-// Generic fetch wrapper with error handling
+// Get auth token from localStorage
+function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('auth_token');
+}
+
+// Generic fetch wrapper with error handling and auth
 async function fetchAPI<T>(
   endpoint: string, 
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
+  const token = getAuthToken();
+  
+  const headers: Record<string, string> = {
+    'Accept': 'application/json',
+    ...(options.headers as Record<string, string> || {}),
+  };
+  
+  // Add auth token if available
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  // Ensure Content-Type is set for POST/PUT requests with JSON body
+  if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
   
   const response = await fetch(url, {
     ...options,
-    headers: {
-      'Accept': 'application/json',
-      ...options.headers,
-    },
+    headers,
+    credentials: 'include',  // Include credentials for CORS
   });
 
   if (!response.ok) {
-    const error: ApiError = await response.json().catch(() => ({ 
-      detail: `HTTP ${response.status}: ${response.statusText}` 
-    }));
-    throw new Error(error.detail);
+    let errorDetail = `HTTP ${response.status}: ${response.statusText}`;
+    try {
+      const error: ApiError = await response.json();
+      errorDetail = error.detail || errorDetail;
+    } catch {
+      // If response is not JSON, use status text
+    }
+    throw new Error(errorDetail);
   }
 
   return response.json();
@@ -52,14 +82,12 @@ export const api = {
 
   // Claims
   claims: {
-    // Create a new claim
+    // Create a new claim (uses authenticated user's wallet)
     create: async (data: {
-      claimant_address: string;
       claim_amount: number;
       files?: File[];
     }): Promise<ClaimCreateResponse> => {
       const formData = new FormData();
-      formData.append('claimant_address', data.claimant_address);
       formData.append('claim_amount', data.claim_amount.toString());
       
       if (data.files) {
@@ -118,9 +146,68 @@ export const api = {
     },
   },
 
-  // Authentication (Circle Wallets)
+  // Authentication (Our own auth system)
   auth: {
-    // Initialize Circle authentication
+    // Register new user
+    register: async (data: RegisterRequest): Promise<RegisterResponse> => {
+      const response = await fetchAPI<RegisterResponse>('/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+      
+      // Store token
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', response.access_token);
+        localStorage.setItem('user_id', response.user_id);
+        localStorage.setItem('user_role', response.role);
+      }
+      
+      return response;
+    },
+
+    // Login user
+    login: async (data: LoginRequest): Promise<LoginResponse> => {
+      const response = await fetchAPI<LoginResponse>('/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+      
+      // Store token
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', response.access_token);
+        localStorage.setItem('user_id', response.user_id);
+        localStorage.setItem('user_role', response.role);
+      }
+      
+      return response;
+    },
+
+    // Get current user info
+    me: async (): Promise<UserInfo> => {
+      return fetchAPI<UserInfo>('/auth/me');
+    },
+
+    // Logout (clear token)
+    logout: (): void => {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('user_id');
+        localStorage.removeItem('user_role');
+      }
+    },
+
+    // Get wallet info
+    getWallet: async (): Promise<WalletInfo> => {
+      return fetchAPI<WalletInfo>('/auth/wallet');
+    },
+
+    // Legacy Circle endpoints (deprecated, kept for backward compatibility)
     initCircle: async (userId?: string): Promise<{
       user_id: string;
       user_token: string;
@@ -136,7 +223,6 @@ export const api = {
       });
     },
 
-    // Complete Circle authentication
     completeCircle: async (data: {
       user_token: string;
       wallet_address: string;
@@ -152,18 +238,6 @@ export const api = {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(data),
-      });
-    },
-
-    // Get wallet address for authenticated user
-    getWallet: async (userToken: string): Promise<{
-      wallet_address: string;
-      user_id: string;
-    }> => {
-      return fetchAPI('/auth/circle/wallet', {
-        headers: {
-          'X-User-Token': userToken,
-        },
       });
     },
   },

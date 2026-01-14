@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Navbar } from './components/Navbar';
 import { Button, Card } from './components/ui';
+import { api } from '@/lib/api';
 
 const features = [
   {
@@ -47,41 +48,43 @@ const stats = [
 
 export default function HomePage() {
   const [walletAddress, setWalletAddress] = useState<string | undefined>();
-  const [userToken, setUserToken] = useState<string | undefined>();
+  const [userRole, setUserRole] = useState<string | undefined>();
 
   // Handle wallet connection
-  const handleConnect = (address: string, token?: string) => {
+  const handleConnect = (address: string, role: string) => {
     setWalletAddress(address);
-    if (token) {
-      setUserToken(token);
-      localStorage.setItem('circle_user_token', token);
-      localStorage.setItem('wallet_address', address);
-    }
+    setUserRole(role);
   };
 
   // Handle wallet disconnection
   const handleDisconnect = () => {
     setWalletAddress(undefined);
-    setUserToken(undefined);
-    localStorage.removeItem('circle_user_token');
-    localStorage.removeItem('wallet_address');
+    setUserRole(undefined);
+    api.auth.logout();
   };
 
-  // Restore wallet from localStorage on mount
+  // Restore wallet from auth on mount
   useEffect(() => {
-    const storedToken = localStorage.getItem('circle_user_token');
-    const storedAddress = localStorage.getItem('wallet_address');
-    if (storedToken && storedAddress) {
-      setUserToken(storedToken);
-      setWalletAddress(storedAddress);
-    }
+    const loadUserInfo = async () => {
+      try {
+        const userInfo = await api.auth.me();
+        if (userInfo.wallet_address) {
+          setWalletAddress(userInfo.wallet_address);
+          setUserRole(userInfo.role);
+        }
+      } catch (err) {
+        // Not logged in
+        api.auth.logout();
+      }
+    };
+    loadUserInfo();
   }, []);
 
   return (
     <div className="min-h-screen">
       <Navbar 
         walletAddress={walletAddress}
-        userToken={userToken}
+        role={userRole}
         onConnect={handleConnect}
         onDisconnect={handleDisconnect}
       />
