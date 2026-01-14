@@ -27,6 +27,9 @@ jobs:
           pip install "cython<3.0.0" wheel
           pip install "pyyaml==5.4.1" --no-build-isolation
       
+      - name: Install compatible markupsafe for Rye
+        run: pip install "markupsafe<2.1.0"
+      
       - name: Install Rye
         run: pip install --upgrade pip setuptools wheel && pip install rye
       
