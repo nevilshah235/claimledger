@@ -57,7 +57,7 @@ def test_settle_claim_requires_auth(client, test_db, test_claim):
         json={}
     )
     
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 def test_settle_claim_not_approved(client, test_db, test_claim, insurer_headers):

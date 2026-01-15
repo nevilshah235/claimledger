@@ -144,7 +144,7 @@ def test_get_current_user_no_token(client):
     """Test getting current user without token."""
     response = client.get("/auth/me")
     
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 def test_get_wallet_info(client, auth_headers, test_claimant, mock_developer_wallets_service):

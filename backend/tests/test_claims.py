@@ -38,7 +38,7 @@ def test_create_claim_requires_auth(client):
         files=files
     )
     
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 def test_create_claim_insurer_forbidden(client, insurer_headers):
@@ -126,9 +126,8 @@ def test_list_claims_unauthenticated(client):
     """Test that unauthenticated users get empty list."""
     response = client.get("/claims")
     
-    # The endpoint allows unauthenticated but returns empty list
-    # However, FastAPI security might require auth, so check for either 200 or 403
-    assert response.status_code in [status.HTTP_200_OK, status.HTTP_403_FORBIDDEN]
+    # The endpoint requires authentication, so check for 401
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
     if response.status_code == status.HTTP_200_OK:
         data = response.json()
         assert data == []
