@@ -24,13 +24,10 @@ jobs:
       
       - name: Install Rye
         run: |
-          curl -sSf https://rye.astral.sh/get | bash
+          curl -sSf https://rye.astral.sh/get | bash || exit 1
           echo "$HOME/.rye/shims" >> $GITHUB_PATH
-      
-      - name: Verify Rye installation
-        run: |
           export PATH="$HOME/.rye/shims:$PATH"
-          rye --version
+          rye --version || exit 1
       
       - name: Install dependencies
         working-directory: ./backend
