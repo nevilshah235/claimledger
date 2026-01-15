@@ -62,7 +62,3 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 addopts = "-v --tb=short"
-env = [
-    "DATABASE_URL = sqlite:///./test.db",
-    "JWT_SECRET_KEY = test-secret-key",
-]

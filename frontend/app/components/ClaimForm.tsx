@@ -116,6 +116,7 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
                 accept="image/*,.pdf,.doc,.docx"
                 onChange={handleFileChange}
                 className="hidden"
+                data-testid="file-input"
               />
 
               {/* File List */}

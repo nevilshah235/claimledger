@@ -22,7 +22,8 @@ describe('ClaimStatus', () => {
   it('should render claim status', () => {
     render(<ClaimStatus claim={mockClaim} />);
 
-    expect(screen.getByText(/claim-123/i)).toBeInTheDocument();
+    // Claim ID is truncated to first 8 characters
+    expect(screen.getByText(/claim-12/i)).toBeInTheDocument();
     expect(screen.getByText(/submitted/i)).toBeInTheDocument();
   });
 
@@ -37,7 +38,9 @@ describe('ClaimStatus', () => {
 
     render(<ClaimStatus claim={approvedClaim} />);
 
-    expect(screen.getByText(/approved/i)).toBeInTheDocument();
+    // Use getAllByText since "Approved" appears multiple times (badge and label)
+    const approvedTexts = screen.getAllByText(/approved/i);
+    expect(approvedTexts.length).toBeGreaterThan(0);
     expect(screen.getByText(/\$1,000/i)).toBeInTheDocument();
   });
 
@@ -62,6 +65,8 @@ describe('ClaimStatus', () => {
 
     render(<ClaimStatus claim={claimWithCosts} />);
 
-    expect(screen.getByText(/\$0.35/i)).toBeInTheDocument();
+    // Use getAllByText since "$0.35" appears multiple times (processing cost and button text)
+    const costTexts = screen.getAllByText(/\$0.35/i);
+    expect(costTexts.length).toBeGreaterThan(0);
   });
 });

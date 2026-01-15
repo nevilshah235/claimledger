@@ -32,7 +32,7 @@ describe('AuthModal', () => {
     expect(screen.getByPlaceholderText(/••••••••/i)).toBeInTheDocument();
   });
 
-  it('should render register form when isLogin is false', () => {
+  it('should render register form when isLogin is false', async () => {
     render(
       <AuthModal
         isOpen={true}
@@ -44,9 +44,11 @@ describe('AuthModal', () => {
 
     // Click to switch to register
     const switchButton = screen.getByText(/don't have an account/i);
-    userEvent.click(switchButton);
+    await userEvent.click(switchButton);
 
-    expect(screen.getByText(/register as insurer/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/register as insurer/i)).toBeInTheDocument();
+    });
   });
 
   it('should call login API on form submit', async () => {
