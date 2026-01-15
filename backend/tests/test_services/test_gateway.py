@@ -117,11 +117,19 @@ async def test_create_micropayment_checks_balance():
     )
     
     # Mock the HTTP client to avoid actual API calls
-    with patch.object(service.http_client, 'post') as mock_post:
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"receiptToken": "test_receipt_123"}
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
+    with patch.object(service.http_client, 'get') as mock_get, \
+         patch.object(service.http_client, 'post') as mock_post:
+        # Mock balance check response
+        mock_balance_response = MagicMock()
+        mock_balance_response.json.return_value = {"balance": "1000.00", "currency": "USDC"}
+        mock_balance_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_balance_response
+        
+        # Mock micropayment creation response
+        mock_payment_response = MagicMock()
+        mock_payment_response.json.return_value = {"receiptToken": "test_receipt_123"}
+        mock_payment_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_payment_response
         
         receipt = await service.create_micropayment(
             amount=Decimal("0.10"),

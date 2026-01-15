@@ -69,7 +69,37 @@ class GatewayService:
             # Demo mode - return mock receipt
             return f"mock_receipt_{payment_id}_{uuid.uuid4().hex[:8]}"
         
-        # Production mode - call Gateway API
+        # Production mode - check balance first, then call Gateway API
+        if self.api_key and self.agent_wallet_address:
+            try:
+                balance_info = await self.get_balance()
+                # Handle both dict and Decimal return types from get_balance
+                balance = None
+                if isinstance(balance_info, dict):
+                    balance_str = balance_info.get("balance", "0.00")
+                    # If there's an error in balance_info, skip balance check
+                    if "error" not in balance_info:
+                        try:
+                            balance = Decimal(balance_str)
+                        except (ValueError, TypeError):
+                            pass  # Invalid balance format, skip check
+                elif isinstance(balance_info, Decimal):
+                    balance = balance_info
+                
+                # Only fail if we successfully got a balance and it's insufficient
+                if balance is not None and balance < amount:
+                    return None  # Insufficient balance
+                    
+            except Exception as e:
+                # If balance check fails, log warning but proceed with payment
+                import logging
+                logging.warning(
+                    f"Gateway balance API returned {e}: Could not verify Gateway balance "
+                    f"(API unavailable or wallet not found), but proceeding with receipt issuance. "
+                    f"Payment ID: {payment_id}. Consider checking balance manually."
+                )
+        
+        # Call Gateway API to create micropayment
         try:
             response = await self.http_client.post(
                 f"{self.api_base_url}/micropayments",
@@ -127,7 +157,7 @@ class GatewayService:
             wallet_address: Wallet address to check (default: agent wallet)
             
         Returns:
-            Balance information
+            Balance information (always returns a dict, never None)
         """
         address = wallet_address or self.agent_wallet_address
         
@@ -141,6 +171,15 @@ class GatewayService:
             }
         
         # Production mode - query Gateway API
+        if not address:
+            # No address provided and no default address
+            return {
+                "address": None,
+                "balance": "0.00",
+                "currency": "USDC",
+                "error": "No wallet address provided"
+            }
+        
         try:
             response = await self.http_client.get(
                 f"{self.api_base_url}/balances/{address}"
@@ -148,8 +187,10 @@ class GatewayService:
             response.raise_for_status()
             return response.json()
             
-        except httpx.HTTPError as e:
-            print(f"Balance query error: {e}")
+        except Exception as e:
+            # Catch all exceptions to ensure we always return a dict
+            import logging
+            logging.warning(f"Balance query error: {e}")
             return {
                 "address": address,
                 "balance": "0.00",
