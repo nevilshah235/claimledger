@@ -12,11 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -26,10 +21,12 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
+          python-version: "3.11"
       
       - name: Install dependencies
         working-directory: ./backend
         run: |
+          uv pip install --upgrade pip setuptools wheel hatchling
           uv pip install -e ".[dev]"
         env:
           DATABASE_URL: "sqlite:///./test.db"
