@@ -25,18 +25,27 @@ jobs:
       - name: Install Rye
         run: |
           curl -sSf https://rye.astral.sh/get | bash
-          echo "${HOME}/.rye/shims" >> $GITHUB_PATH
+          echo "$HOME/.rye/shims" >> $GITHUB_PATH
+      
+      - name: Verify Rye installation
+        run: |
+          export PATH="$HOME/.rye/shims:$PATH"
+          rye --version
       
       - name: Install dependencies
         working-directory: ./backend
-        run: rye sync
+        run: |
+          export PATH="$HOME/.rye/shims:$PATH"
+          rye sync
         env:
           DATABASE_URL: "sqlite:///./test.db"
           JWT_SECRET_KEY: "test-secret-key-for-ci"
      
       - name: Run tests
         working-directory: ./backend
-        run: rye run pytest
+        run: |
+          export PATH="$HOME/.rye/shims:$PATH"
+          rye run pytest
         env:
           DATABASE_URL: "sqlite:///./test.db"
           JWT_SECRET_KEY: "test-secret-key-for-ci"
