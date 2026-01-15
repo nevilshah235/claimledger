@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import X402Receipt
+from ..services.gateway import get_gateway_service
 
 router = APIRouter(prefix="/verifier", tags=["verifier"])
 
@@ -77,7 +78,7 @@ class FraudCheckResponse(BaseModel):
     check_id: str
 
 
-def verify_payment_receipt(
+async def verify_payment_receipt(
     receipt: Optional[str],
     expected_amount: Decimal,
     verifier_type: str,
@@ -87,23 +88,39 @@ def verify_payment_receipt(
     """
     Verify a payment receipt from Circle Gateway.
     
-    In production, this would validate the receipt with Circle Gateway API.
-    For demo, we check if receipt exists and is properly formatted.
+    Validates the receipt with Circle Gateway API if available,
+    otherwise accepts receipts in demo mode.
+    
+    Args:
+        receipt: Payment receipt token from Gateway
+        expected_amount: Expected payment amount in USDC
+        verifier_type: Type of verifier (document, image, fraud)
+        claim_id: Claim ID for tracking
+        db: Database session
+        
+    Returns:
+        True if receipt is valid, False otherwise
     """
     if not receipt:
         return False
     
-    # TODO: Validate receipt with Circle Gateway API
-    # For now, accept any non-empty receipt for demo purposes
-    # In production: gateway.validate_receipt(receipt)
+    # Validate receipt with Circle Gateway API
+    gateway = get_gateway_service()
+    is_valid = await gateway.validate_receipt(receipt)
+    
+    if not is_valid:
+        return False
     
     # Store receipt for audit trail
+    # Extract payment ID from receipt (first 36 chars or full receipt)
+    payment_id = receipt[:36] if len(receipt) >= 36 else receipt
+    
     x402_receipt = X402Receipt(
         id=str(uuid.uuid4()),
-        claim_id=claim_id,  # Using string ID
+        claim_id=claim_id,
         verifier_type=verifier_type,
         amount=expected_amount,
-        gateway_payment_id=receipt[:36] if len(receipt) >= 36 else receipt,
+        gateway_payment_id=payment_id,
         gateway_receipt=receipt,
         created_at=datetime.utcnow()
     )
@@ -157,13 +174,15 @@ async def verify_document(
     Returns extracted data and validity assessment.
     """
     # Check for payment receipt
-    if not verify_payment_receipt(
+    receipt_valid = await verify_payment_receipt(
         x_payment_receipt,
         DOCUMENT_VERIFICATION_PRICE,
         "document",
         request.claim_id,
         db
-    ):
+    )
+    
+    if not receipt_valid:
         return create_402_response(
             DOCUMENT_VERIFICATION_PRICE,
             "Document verification fee",
@@ -202,13 +221,15 @@ async def analyze_image(
     Returns damage assessment and validity.
     """
     # Check for payment receipt
-    if not verify_payment_receipt(
+    receipt_valid = await verify_payment_receipt(
         x_payment_receipt,
         IMAGE_ANALYSIS_PRICE,
         "image",
         request.claim_id,
         db
-    ):
+    )
+    
+    if not receipt_valid:
         return create_402_response(
             IMAGE_ANALYSIS_PRICE,
             "Image analysis fee",
@@ -247,13 +268,15 @@ async def check_fraud(
     Returns fraud score and risk level.
     """
     # Check for payment receipt
-    if not verify_payment_receipt(
+    receipt_valid = await verify_payment_receipt(
         x_payment_receipt,
         FRAUD_CHECK_PRICE,
         "fraud",
         request.claim_id,
         db
-    ):
+    )
+    
+    if not receipt_valid:
         return create_402_response(
             FRAUD_CHECK_PRICE,
             "Fraud check fee",
