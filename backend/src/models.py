@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Numeric, String, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, Boolean, JSON
 from sqlalchemy.orm import declarative_base, relationship
 
 # Use String for UUID to support both SQLite and PostgreSQL
@@ -29,15 +29,21 @@ class Claim(Base):
         String(20),
         nullable=False,
         default="SUBMITTED",
-    )  # SUBMITTED, EVALUATING, APPROVED, SETTLED, REJECTED
+    )  # SUBMITTED, EVALUATING, APPROVED, SETTLED, REJECTED, AWAITING_DATA
     decision = Column(
         String(20),
         nullable=True,
-    )  # APPROVED, NEEDS_REVIEW, REJECTED
+    )  # AUTO_APPROVED, APPROVED_WITH_REVIEW, NEEDS_REVIEW, NEEDS_MORE_DATA, INSUFFICIENT_DATA, REJECTED
     confidence = Column(Float, nullable=True)  # 0.0-1.0
     approved_amount = Column(Numeric(18, 2), nullable=True)  # USDC amount
     processing_costs = Column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))  # Sum of x402 payments
     tx_hash = Column(String(66), nullable=True)  # Arc transaction hash
+    auto_approved = Column(Boolean, default=False)  # Auto-approved by AI agent
+    auto_settled = Column(Boolean, default=False)  # Auto-settled on blockchain
+    comprehensive_summary = Column(Text, nullable=True)  # AI-generated summary
+    review_reasons = Column(JSON, nullable=True)  # Reasons for manual review
+    requested_data = Column(JSON, nullable=True)  # Types of additional data requested by agent
+    human_review_required = Column(Boolean, default=False)  # Flag for human-in-the-loop
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -45,6 +51,7 @@ class Claim(Base):
     evidence = relationship("Evidence", back_populates="claim", cascade="all, delete-orphan")
     evaluations = relationship("Evaluation", back_populates="claim", cascade="all, delete-orphan")
     x402_receipts = relationship("X402Receipt", back_populates="claim", cascade="all, delete-orphan")
+    agent_results = relationship("AgentResult", back_populates="claim", cascade="all, delete-orphan")
 
 
 class Evidence(Base):
@@ -57,6 +64,10 @@ class Evidence(Base):
     file_type = Column(String(20), nullable=False)  # image, document
     file_path = Column(String(255), nullable=False)  # Local file path
     ipfs_hash = Column(String(64), nullable=True)  # Optional IPFS hash
+    file_size = Column(Integer, nullable=True)  # File size in bytes
+    mime_type = Column(String(100), nullable=True)  # MIME type
+    analysis_metadata = Column(JSON, nullable=True)  # Store Gemini analysis results
+    processing_status = Column(String(20), nullable=True, default="PENDING")  # PENDING, PROCESSING, COMPLETED, FAILED
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     # Relationships
@@ -125,3 +136,19 @@ class UserWallet(Base):
 
     # Relationships
     user = relationship("User", back_populates="wallet")
+
+
+class AgentResult(Base):
+    """Store results from each specialized agent."""
+    
+    __tablename__ = "agent_results"
+    
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    claim_id = Column(String(36), ForeignKey("claims.id"), nullable=False)
+    agent_type = Column(String(50), nullable=False)  # document, image, video, audio, fraud, reasoning
+    result = Column(JSON, nullable=False)
+    confidence = Column(Float, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    # Relationships
+    claim = relationship("Claim", back_populates="agent_results")
