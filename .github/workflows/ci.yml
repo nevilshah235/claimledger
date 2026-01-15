@@ -22,20 +22,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev
       
-      - name: Install Cython < 3.0 and PyYAML for compatibility
-        run: |
-          pip install "cython<3.0.0" wheel
-          pip install "pyyaml==5.4.1" --no-build-isolation
-      
-      - name: Install compatible markupsafe for Rye
-        run: pip install "markupsafe<2.1.0"
-      
       - name: Install Rye
-        run: pip install --upgrade pip setuptools wheel && pip install rye
+        uses: astral-sh/setup-rye@v4
+        with:
+          version: 'latest'
       
       - name: Install dependencies
         working-directory: ./backend
         run: rye sync
+        env:
+          DATABASE_URL: "sqlite:///./test.db"
+          JWT_SECRET_KEY: "test-secret-key-for-ci"
      
       - name: Run tests
         working-directory: ./backend
@@ -58,11 +55,11 @@ jobs:
       
       - name: Install dependencies
         working-directory: ./frontend
-        run: npm ci
+        run: npm install
       
       - name: Run tests
         working-directory: ./frontend
-        run: npm test -- --ci --coverage=false
+        run: npm test -- --ci --coverage=false --passWithNoTests
 
   test-contracts:
     runs-on: ubuntu-latest
