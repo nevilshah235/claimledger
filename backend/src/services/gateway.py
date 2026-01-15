@@ -285,7 +285,6 @@ class GatewayService:
         except Exception as e:
             logger.error(f"Error validating receipt: {e}")
             return False
-    
 
 
 # Singleton instance

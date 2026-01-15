@@ -29,31 +29,19 @@ echo -e "${YELLOW}Step 2: Installing build dependencies (simulated - skipping on
 echo "  Note: On CI, this would run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev"
 echo ""
 
-echo -e "${YELLOW}Step 3: Installing Cython < 3.0 and PyYAML...${NC}"
-pip3 install --upgrade pip setuptools wheel
-pip3 install "cython<3.0.0" wheel
-pip3 install "pyyaml==5.4.1" --no-build-isolation
-echo -e "${GREEN}✅ Cython and PyYAML installed${NC}"
+echo -e "${YELLOW}Step 3: Installing uv...${NC}"
+pip3 install uv || curl -LsSf https://astral.sh/uv/install.sh | sh
+echo -e "${GREEN}✅ uv installed${NC}"
 echo ""
 
-echo -e "${YELLOW}Step 4: Installing compatible markupsafe for Rye...${NC}"
-pip3 install "markupsafe<2.1.0"
-echo -e "${GREEN}✅ markupsafe installed${NC}"
-echo ""
-
-echo -e "${YELLOW}Step 5: Installing Rye...${NC}"
-pip3 install rye
-echo -e "${GREEN}✅ Rye installed${NC}"
-echo ""
-
-echo -e "${YELLOW}Step 6: Installing project dependencies with Rye...${NC}"
+echo -e "${YELLOW}Step 4: Installing project dependencies with uv...${NC}"
 cd backend
-rye sync
-echo -e "${GREEN}✅ Dependencies synced${NC}"
+uv pip install -e ".[dev]"
+echo -e "${GREEN}✅ Dependencies installed${NC}"
 echo ""
 
-echo -e "${YELLOW}Step 7: Running tests...${NC}"
-rye run pytest || {
+echo -e "${YELLOW}Step 5: Running tests...${NC}"
+uv run pytest || {
     echo -e "${RED}❌ Tests failed${NC}"
     exit 1
 }
