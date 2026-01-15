@@ -236,7 +236,7 @@ For detailed architecture documentation, see [docs/HLD.md](docs/HLD.md).
 | AI SDK | google-genai | 0.2+ | Gemini API client |
 | HTTP Client | httpx | 0.25+ | Async HTTP requests |
 | Auth | python-jose | 3.3+ | JWT tokens |
-| Package Manager | Rye | Latest | Dependency management |
+| Package Manager | uv | Latest | Dependency management |
 
 ### Frontend
 
@@ -326,7 +326,7 @@ claimledger/
 - **Python 3.11+**: [Download](https://www.python.org/downloads/)
 - **Node.js 18+**: [Download](https://nodejs.org/)
 - **PostgreSQL** (optional): SQLite works for development
-- **Rye**: Python package manager - `pip install rye`
+- **uv**: Python package manager - `curl -LsSf https://astral.sh/uv/install.sh | sh` or `pip install uv`
 - **Foundry**: Solidity toolkit - `curl -L https://foundry.paradigm.xyz | bash && foundryup`
 
 ### Environment Setup
@@ -360,12 +360,12 @@ USDC_ADDRESS=0x3600000000000000000000000000000000
 2. Install dependencies:
 ```bash
 cd backend
-rye sync
+uv pip install -e ".[dev]"
 ```
 
 3. Start backend server:
 ```bash
-rye run uvicorn src.main:app --reload
+uv run uvicorn src.main:app --reload
 ```
 
 Backend runs on `http://localhost:8000`
@@ -435,7 +435,7 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `ci`
 ```bash
 # Backend tests
 cd backend
-rye run pytest
+uv run pytest
 
 # Contract tests
 cd contracts
@@ -555,7 +555,7 @@ For detailed API documentation, visit `http://localhost:8000/docs` when backend 
 **Backend returns 500 error**
 - Check backend logs for error details
 - Verify database is initialized
-- Ensure dependencies are installed: `rye sync`
+- Ensure dependencies are installed: `uv pip install -e ".[dev]"`
 
 **Frontend build fails**
 - Check Node.js version: `node --version` (should be 18+)
