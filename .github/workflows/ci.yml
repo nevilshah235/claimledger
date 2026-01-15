@@ -26,6 +26,8 @@ jobs:
       - name: Install dependencies
         working-directory: ./backend
         run: |
+          uv venv
+          source .venv/bin/activate
           uv pip install --upgrade pip setuptools wheel hatchling
           uv pip install -e ".[dev]"
         env:
