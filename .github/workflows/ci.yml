@@ -20,12 +20,12 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev
+          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev curl
       
       - name: Install Rye
-        uses: astral-sh/setup-rye@v4
-        with:
-          version: 'latest'
+        run: |
+          curl -sSf https://rye.astral.sh/get | bash
+          echo "${HOME}/.rye/shims" >> $GITHUB_PATH
       
       - name: Install dependencies
         working-directory: ./backend
