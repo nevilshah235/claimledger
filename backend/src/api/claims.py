@@ -5,6 +5,8 @@ GET /claims/{id} - Get claim status
 """
 
 import uuid
+import os
+from pathlib import Path
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List
@@ -32,6 +34,8 @@ class ClaimResponse(BaseModel):
     approved_amount: Optional[float] = None
     processing_costs: Optional[float] = None
     tx_hash: Optional[str] = None
+    requested_data: Optional[list] = None
+    human_review_required: Optional[bool] = False
     created_at: datetime
 
     class Config:
@@ -89,24 +93,65 @@ async def create_claim(
     db.add(claim)
     
     # Process and store evidence files
+    # Get backend directory (where this file is located)
+    backend_dir = Path(__file__).parent.parent.parent
+    uploads_dir = backend_dir / "uploads"
+    # Ensure uploads directory exists (create parent directories if needed)
+    uploads_dir.mkdir(exist_ok=True, parents=True)
+    
     for file in files:
+        if not file.filename:
+            continue  # Skip files without names
+        
         # Determine file type
         file_type = "document"
         if file.content_type and file.content_type.startswith("image/"):
             file_type = "image"
         
-        # Save file to local storage (for demo)
-        # In production, would use IPFS or cloud storage
-        file_path = f"uploads/{claim_id}/{file.filename}"
+        # Create claim-specific directory
+        claim_dir = uploads_dir / claim_id
+        claim_dir.mkdir(exist_ok=True, parents=True)
         
-        evidence = Evidence(
-            id=str(uuid.uuid4()),
-            claim_id=claim_id,
-            file_type=file_type,
-            file_path=file_path,
-            created_at=datetime.utcnow()
-        )
-        db.add(evidence)
+        # Save file to local storage
+        # In production, would use IPFS or cloud storage
+        # Sanitize filename to prevent path traversal
+        safe_filename = file.filename.replace("..", "").replace("/", "_").replace("\\", "_")
+        file_path = claim_dir / safe_filename
+        
+        # Read file content and write to disk
+        try:
+            file_content = await file.read()
+            with open(file_path, "wb") as f:
+                f.write(file_content)
+            
+            # Store absolute path in database (agents need to read files)
+            # Use absolute path so agents can find files regardless of working directory
+            absolute_path = str(file_path.absolute())
+            
+            evidence = Evidence(
+                id=str(uuid.uuid4()),
+                claim_id=claim_id,
+                file_type=file_type,
+                file_path=absolute_path,
+                file_size=len(file_content),
+                mime_type=file.content_type,
+                created_at=datetime.utcnow()
+            )
+            db.add(evidence)
+        except Exception as e:
+            print(f"Error saving file {file.filename}: {e}")
+            # Still create evidence record but mark as failed
+            evidence = Evidence(
+                id=str(uuid.uuid4()),
+                claim_id=claim_id,
+                file_type=file_type,
+                file_path=f"uploads/{claim_id}/{file.filename}",  # Fallback path
+                file_size=None,
+                mime_type=file.content_type,
+                processing_status="FAILED",
+                created_at=datetime.utcnow()
+            )
+            db.add(evidence)
     
     db.commit()
     
@@ -162,6 +207,8 @@ async def list_claims(
             approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
             processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
             tx_hash=claim.tx_hash,
+            requested_data=claim.requested_data if hasattr(claim, 'requested_data') else None,
+            human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
             created_at=claim.created_at
         )
         for claim in claims
@@ -225,5 +272,7 @@ async def get_claim(
         approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
         processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
         tx_hash=claim.tx_hash,
+        requested_data=claim.requested_data if hasattr(claim, 'requested_data') else None,
+        human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
         created_at=claim.created_at
     )

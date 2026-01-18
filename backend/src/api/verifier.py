@@ -19,8 +19,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import X402Receipt
+from ..models import X402Receipt, Claim, Evidence
 from ..services.gateway import get_gateway_service
+from ..agent.agents.document_agent import DocumentAgent
+from ..agent.agents.image_agent import ImageAgent
+from ..agent.agents.fraud_agent import FraudAgent
 
 router = APIRouter(prefix="/verifier", tags=["verifier"])
 
@@ -189,19 +192,21 @@ async def verify_document(
             "document"
         )
     
-    # Perform document verification (mock for demo)
-    # In production, would use OCR/AI to extract and verify document
-    verification_id = str(uuid.uuid4())
+    # Use DocumentAgent for real Gemini API analysis
+    document_agent = DocumentAgent()
+    result = await document_agent.analyze(
+        request.claim_id,
+        [{"file_path": request.document_path}]
+    )
+    
+    # Handle None result or missing verification_id
+    if not result:
+        result = {}
+    verification_id = result.get("verification_id") or str(uuid.uuid4())
     
     return DocumentVerificationResponse(
-        extracted_data={
-            "document_type": "invoice",
-            "amount": 3500.00,
-            "date": "2024-01-15",
-            "vendor": "Auto Repair Shop",
-            "description": "Front bumper repair and replacement"
-        },
-        valid=True,
+        extracted_data=result.get("extracted_data", {}),
+        valid=result.get("valid", False),
         verification_id=verification_id
     )
 
@@ -236,19 +241,21 @@ async def analyze_image(
             "image"
         )
     
-    # Perform image analysis (mock for demo)
-    # In production, would use computer vision/AI to analyze damage
-    analysis_id = str(uuid.uuid4())
+    # Use ImageAgent for real Gemini API analysis
+    image_agent = ImageAgent()
+    result = await image_agent.analyze(
+        request.claim_id,
+        [{"file_path": request.image_path}]
+    )
+    
+    # Handle None result or missing analysis_id
+    if not result:
+        result = {}
+    analysis_id = result.get("analysis_id") or str(uuid.uuid4())
     
     return ImageAnalysisResponse(
-        damage_assessment={
-            "damage_type": "collision",
-            "affected_parts": ["front_bumper", "hood"],
-            "severity": "moderate",
-            "estimated_cost": 3500.00,
-            "confidence": 0.89
-        },
-        valid=True,
+        damage_assessment=result.get("damage_assessment", {}),
+        valid=result.get("valid", False),
         analysis_id=analysis_id
     )
 
@@ -283,16 +290,30 @@ async def check_fraud(
             "fraud"
         )
     
-    # Perform fraud check (mock for demo)
-    # In production, would use ML model to detect fraud patterns
-    check_id = str(uuid.uuid4())
+    # Use FraudAgent for real Gemini API analysis
+    # Get claim and evidence from database
+    claim = db.query(Claim).filter(Claim.id == request.claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
     
-    # Mock low fraud score for demo happy path
-    fraud_score = 0.05
-    risk_level = "LOW" if fraud_score < 0.3 else ("MEDIUM" if fraud_score < 0.7 else "HIGH")
+    evidence = db.query(Evidence).filter(Evidence.claim_id == request.claim_id).all()
+    evidence_dicts = [
+        {"file_type": e.file_type, "file_path": e.file_path}
+        for e in evidence
+    ]
+    
+    fraud_agent = FraudAgent()
+    result = await fraud_agent.analyze(
+        request.claim_id,
+        claim.claim_amount,
+        claim.claimant_address,
+        evidence_dicts
+    )
+    
+    check_id = result.get("check_id", str(uuid.uuid4()))
     
     return FraudCheckResponse(
-        fraud_score=fraud_score,
-        risk_level=risk_level,
+        fraud_score=result.get("fraud_score", 0.5),
+        risk_level=result.get("risk_level", "MEDIUM"),
         check_id=check_id
     )
