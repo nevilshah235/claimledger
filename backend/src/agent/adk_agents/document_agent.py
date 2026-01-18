@@ -22,7 +22,7 @@ class ADKDocumentAgent:
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash-exp")
+        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash")
         self.agent = None
         
         if not ADK_AVAILABLE:
@@ -33,46 +33,53 @@ class ADKDocumentAgent:
             print("⚠️  Warning: GOOGLE_AI_API_KEY or GOOGLE_API_KEY not set")
             return
         
+        # Ensure GOOGLE_API_KEY is set for ADK (ADK uses GOOGLE_API_KEY internally)
+        if not os.getenv("GOOGLE_API_KEY") and self.api_key:
+            os.environ["GOOGLE_API_KEY"] = self.api_key
+        
         try:
             # Import ADK tools
             from ..adk_tools import get_adk_tools
             
             # Create ADK LlmAgent with multimodal support
+            # ADK reads GOOGLE_API_KEY from environment automatically
             self.agent = LlmAgent(
                 model=self.model_name,
                 name="document_agent",
                 description="Specialized agent for analyzing insurance claim documents (invoices, receipts, medical records)",
-                instruction="""You are an insurance claim document analysis agent.
-
-Your job is to analyze insurance claim documents and extract key information.
+                instruction="""You are an insurance claim document analysis agent. Your job is to extract data from documents - classification and extraction only.
 
 **Process:**
-1. First, if you need to verify the document authenticity, call verify_document(claim_id, document_path) tool
-   - This tool costs $0.10 USDC and handles payment automatically via x402
-   - The tool will verify document authenticity and extract structured data
-2. Analyze the provided document (PDF, image, etc.) using multimodal capabilities
-3. Extract: document type, amount, date, vendor/provider, description
-4. Check validity indicators (signatures, stamps, authenticity)
-5. Return structured JSON with your findings
+1. Classify the document structure and type
+2. Extract ALL relevant fields based on document type
+3. Return structured JSON with findings
 
-**Important:**
-- You have access to verify_document tool - use it when you need to verify document authenticity
-- The tool handles payment automatically, you don't need to worry about payment processing
-- Combine tool results with your own analysis for best results
+**STAGE 1 - Classification:**
+- document_category: receipt | invoice | medical_record | tabular_report | text_document | form | statement | estimate | other
+- document_structure: structured | semi_structured | unstructured
+- has_tables: boolean
+- has_line_items: boolean
+- primary_content_type: financial | medical | legal | general
+
+**STAGE 2 - Extraction:**
+Extract ALL fields you can identify:
+- Receipts/invoices: vendor, invoice_number, dates, amounts, line_items, payment_info, customer_info
+- Tabular documents: all tables with headers/rows, summary fields
+- Text documents: sections, key entities, summary, important dates/amounts
+- Medical records: patient_info, provider_info, diagnosis_codes, procedure_codes, services, insurance_info
+- Validity indicators: signatures, stamps, authenticity markers
 
 **Output Format:**
-Return a JSON object with:
-- document_type: string (invoice, receipt, medical record, etc.)
-- amount: number or null
-- date: string (YYYY-MM-DD format)
-- vendor: string or null
-- description: string
-- valid: boolean (true if document appears authentic)
-- confidence: float (0.0-1.0)
-- notes: string (any observations)
+Return JSON with:
+- document_classification: {category, structure, has_tables, has_line_items, primary_content_type}
+- extracted_fields: {all relevant fields as key-value pairs}
+- line_items: array (if applicable)
+- tables: array (if applicable)
+- metadata: {confidence, extraction_method, notes}
+- valid: boolean
 
-Be thorough and accurate in your analysis.""",
-                tools=get_adk_tools(),  # Include all ADK tools
+Focus on extraction only. Verification is handled separately by the orchestrator.""",
+                tools=[],  # Document agent is extraction-only, no tool calling
             )
         except Exception as e:
             print(f"Failed to initialize ADK DocumentAgent: {e}")
@@ -109,7 +116,16 @@ Be thorough and accurate in your analysis.""",
             }
         
         if not self.agent:
-            # Fallback to mock analysis
+            # Fallback to mock analysis - log warning
+            import warnings
+            warnings.warn(
+                f"ADKDocumentAgent: Agent not available. API key: {self.api_key[:10] + '...' if self.api_key else 'NOT SET'}. "
+                f"ADK available: {ADK_AVAILABLE}. "
+                f"Falling back to mock analysis for claim {claim_id}. "
+                f"Set GOOGLE_AI_API_KEY or GOOGLE_API_KEY environment variable to enable real document analysis.",
+                UserWarning
+            )
+            print(f"⚠️  WARNING: ADKDocumentAgent using mock analysis for claim {claim_id}. Real analysis unavailable.")
             return self._mock_analysis(claim_id, documents)
         
         # Analyze each document with ADK agent
@@ -178,24 +194,106 @@ Be thorough and accurate in your analysis.""",
             elif file_name.endswith((".doc", ".docx")):
                 mime_type = "application/msword"
             
-            # Create multimodal content for ADK agent
-            prompt = f"""Analyze this insurance claim document (Claim ID: {claim_id}) and extract:
-1. Document type (invoice, receipt, medical record, etc.)
-2. Amount (if applicable)
-3. Date
-4. Vendor/provider name
-5. Description of services/items
-6. Validity indicators (signatures, stamps, etc.)
+            # Create enhanced multimodal content for ADK agent
+            prompt = f"""Analyze this insurance claim document (Claim ID: {claim_id}) in two stages:
 
-Return a JSON object with:
-- document_type: string
-- amount: number or null
-- date: string (YYYY-MM-DD format)
-- vendor: string or null
-- description: string
-- valid: boolean (true if document appears authentic)
-- confidence: float (0.0-1.0)
-- notes: string (any observations)"""
+STAGE 1 - Document Classification:
+First, determine the document structure and type:
+- document_category: receipt | invoice | medical_record | tabular_report | text_document | form | statement | estimate | other
+- document_structure: structured | semi_structured | unstructured
+- has_tables: boolean (true if document contains tabular data)
+- has_line_items: boolean (true if document has itemized list of services/products)
+- primary_content_type: financial | medical | legal | general
+
+STAGE 2 - Dynamic Field Extraction:
+Based on the classification, extract ALL relevant fields from the document. Be comprehensive and extract everything you can identify.
+
+For receipts/invoices:
+- vendor_name, vendor_address, vendor_phone, vendor_email, vendor_tax_id
+- invoice_number, receipt_number, transaction_id, order_number
+- date, time, due_date, service_date
+- subtotal, tax_amount, tax_rate, discount, shipping, total_amount, currency
+- payment_method, payment_status, payment_reference
+- line_items: array of objects with {{item_name, description, quantity, unit_price, total, sku, category}}
+- customer_name, customer_address, customer_phone, customer_email
+- billing_address, shipping_address
+- notes, terms, conditions, return_policy
+- signature, authorized_by
+
+For tabular documents:
+- table_count: number of tables found
+- tables: array of objects with {{table_index, headers: array, rows: array of arrays, summary: string}}
+- summary_fields: key-value pairs extracted from table summaries
+- data_points: important numeric values from tables
+
+For text documents:
+- sections: array of objects with {{title, content, page_number}}
+- key_entities: extracted entities (names, dates, amounts, locations, etc.)
+- summary: comprehensive document summary
+- important_dates: array of dates found
+- important_amounts: array of monetary values found
+
+For medical records:
+- patient_name, patient_id, date_of_birth, patient_address
+- date_of_service, service_period_start, service_period_end
+- provider_name, provider_id, provider_license, facility_name, facility_address
+- diagnosis_codes: array (ICD codes), procedure_codes: array (CPT codes)
+- services: array of objects with {{service_name, description, date, cost, code}}
+- insurance_info: {{insurance_name, policy_number, group_number, member_id}}
+- authorization_numbers: array
+- referring_physician, attending_physician
+
+For all document types, also extract:
+- document_date, issue_date, expiration_date
+- document_id, reference_number
+- valid: boolean (true if document appears authentic and complete)
+- authenticity_indicators: array of strings (signatures, stamps, watermarks, etc.)
+- confidence: float (0.0-1.0, confidence in extraction accuracy)
+- extraction_method: string (e.g., "multimodal_vision", "ocr", "structured_parsing")
+- notes: string (any observations, missing information, or concerns)
+
+Return a comprehensive JSON object with this structure:
+{{
+  "document_classification": {{
+    "category": "string",
+    "structure": "string",
+    "has_tables": boolean,
+    "has_line_items": boolean,
+    "primary_content_type": "string"
+  }},
+  "extracted_fields": {{
+    // All relevant fields as key-value pairs based on document type
+    // Include both standard fields (document_type, amount, date, vendor, description)
+    // and all additional fields specific to the document category
+  }},
+  "line_items": [ // if has_line_items is true
+    {{
+      "item_name": "string",
+      "description": "string",
+      "quantity": number,
+      "unit_price": number,
+      "total": number,
+      "sku": "string or null",
+      "category": "string or null"
+    }}
+  ],
+  "tables": [ // if has_tables is true
+    {{
+      "table_index": number,
+      "headers": ["string"],
+      "rows": [["string"]],
+      "summary": "string"
+    }}
+  ],
+  "metadata": {{
+    "confidence": float,
+    "extraction_method": "string",
+    "notes": "string"
+  }},
+  "valid": boolean
+}}
+
+IMPORTANT: Extract ALL fields you can identify. Do not limit yourself to only the examples above. Be thorough and comprehensive."""
             
             # Create content parts with multimodal support
             content_parts = [
@@ -212,6 +310,11 @@ Return a JSON object with:
                 agent=self.agent
             )
             
+            # Ensure session exists before using it
+            user_id = f"claim_{claim_id}"
+            session_id = f"doc_analysis_{claim_id}"
+            await runtime.get_or_create_session(user_id, session_id)
+            
             # Create user message with multimodal content
             user_message = types.Content(
                 role="user",
@@ -221,8 +324,8 @@ Return a JSON object with:
             # Run agent and collect response
             response_text = ""
             async for event in runner.run_async(
-                user_id=f"claim_{claim_id}",
-                session_id=f"doc_analysis_{claim_id}",
+                user_id=user_id,
+                session_id=session_id,
                 new_message=user_message
             ):
                 if event.content and event.content.parts:
@@ -236,21 +339,47 @@ Return a JSON object with:
             import json
             import re
             
-            # Try to extract JSON from response
-            json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-            if json_match:
-                try:
-                    extracted = json.loads(json_match.group())
-                except:
-                    extracted = self._parse_text_response(response_text)
-            else:
+            # Try to extract JSON from response - improved parsing for nested JSON
+            json_match = None
+            patterns = [
+                r'```json\s*(\{.*?\})\s*```',  # JSON code blocks
+                r'```\s*(\{.*?\})\s*```',  # Code blocks without json tag
+                r'\{.*\}',  # Simple pattern for nested JSON
+            ]
+            
+            for pattern in patterns:
+                json_match = re.search(pattern, response_text, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1) if json_match.lastindex else json_match.group(0)
+                    try:
+                        extracted = json.loads(json_str)
+                        # Normalize the response structure
+                        extracted = self._normalize_extracted_data(extracted)
+                        break
+                    except json.JSONDecodeError:
+                        continue
+            
+            if not json_match or 'extracted' not in locals():
+                print(f"JSON parsing failed, using fallback parsing.")
                 extracted = self._parse_text_response(response_text)
+            
+            # Validate against schema
+            from ..adk_schemas import validate_against_schema, DOCUMENT_SCHEMA
+            is_valid, validation_errors = validate_against_schema(extracted, DOCUMENT_SCHEMA)
+            if not is_valid:
+                print(f"   └─ ⚠️  Schema validation errors: {', '.join(validation_errors[:3])}")
+                # Fix common issues
+                extracted = self._fix_schema_issues(extracted, validation_errors)
+            
+            # Extract confidence from metadata or top level
+            confidence = extracted.get("metadata", {}).get("confidence") or extracted.get("confidence", 0.8)
+            notes = extracted.get("metadata", {}).get("notes") or extracted.get("notes", "")
             
             return {
                 "valid": extracted.get("valid", False),
                 "extracted_data": extracted,
-                "confidence": extracted.get("confidence", 0.8),
-                "notes": extracted.get("notes", "")
+                "confidence": confidence,
+                "notes": notes
             }
             
         except Exception as e:
@@ -261,17 +390,96 @@ Return a JSON object with:
                 "confidence": 0.0
             }
     
+    def _fix_schema_issues(self, data: Dict[str, Any], errors: List[str]) -> Dict[str, Any]:
+        """Fix common schema validation issues."""
+        # Ensure required fields exist
+        if "document_classification" not in data:
+            data["document_classification"] = {
+                "category": "unknown",
+                "structure": "unstructured",
+                "has_tables": False,
+                "has_line_items": False,
+                "primary_content_type": "general"
+            }
+        if "extracted_fields" not in data:
+            data["extracted_fields"] = {}
+        if "metadata" not in data:
+            data["metadata"] = {
+                "confidence": 0.5,
+                "extraction_method": "unknown",
+                "notes": ""
+            }
+        if "valid" not in data:
+            data["valid"] = False
+        
+        # Ensure nested structures exist
+        if "line_items" not in data:
+            data["line_items"] = []
+        if "tables" not in data:
+            data["tables"] = []
+        
+        return data
+    
+    def _normalize_extracted_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize extracted data to ensure consistent structure."""
+        # If data has document_classification, keep the new structure
+        if "document_classification" in data:
+            return data
+        
+        # Otherwise, wrap old structure in new format for backward compatibility
+        normalized = {
+            "document_classification": {
+                "category": data.get("document_type", "unknown"),
+                "structure": "semi_structured",  # Default assumption
+                "has_tables": False,
+                "has_line_items": False,
+                "primary_content_type": "financial" if data.get("amount") else "general"
+            },
+            "extracted_fields": {
+                "document_type": data.get("document_type", "unknown"),
+                "amount": data.get("amount"),
+                "date": data.get("date"),
+                "vendor": data.get("vendor"),
+                "description": data.get("description", "")
+            },
+            "metadata": {
+                "confidence": data.get("confidence", 0.7),
+                "extraction_method": "legacy_format",
+                "notes": data.get("notes", "")
+            },
+            "valid": data.get("valid", True)
+        }
+        
+        # Preserve any additional fields
+        for key, value in data.items():
+            if key not in ["document_type", "amount", "date", "vendor", "description", "valid", "confidence", "notes"]:
+                normalized["extracted_fields"][key] = value
+        
+        return normalized
+    
     def _parse_text_response(self, text: str) -> Dict[str, Any]:
         """Parse text response when JSON extraction fails."""
+        # Fallback parsing with new structure
         return {
-            "document_type": "unknown",
-            "amount": None,
-            "date": None,
-            "vendor": None,
-            "description": text[:200],
-            "valid": True,
-            "confidence": 0.7,
-            "notes": text
+            "document_classification": {
+                "category": "unknown",
+                "structure": "unstructured",
+                "has_tables": False,
+                "has_line_items": False,
+                "primary_content_type": "general"
+            },
+            "extracted_fields": {
+                "document_type": "unknown",
+                "description": text[:500]  # First 500 chars
+            },
+            "metadata": {
+                "confidence": 0.5,
+                "extraction_method": "text_fallback",
+                "notes": f"Failed to parse JSON. Raw response: {text[:200]}"
+            },
+            "valid": False,  # Mark as invalid since we couldn't parse properly
+            "confidence": 0.5,
+            "notes": text[:500]
         }
     
     def _mock_analysis(
@@ -279,17 +487,28 @@ Return a JSON object with:
         claim_id: str,
         documents: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Mock analysis when ADK is not available."""
+        """Return error state when ADK is not available."""
         return {
-            "summary": f"Mock analysis of {len(documents)} document(s)",
+            "summary": f"Failed to extract data from {len(documents)} document(s). ADK agent unavailable.",
             "extracted_data": {
-                "document_type": "invoice",
-                "amount": 3500.00,
-                "date": "2024-01-15",
-                "vendor": "Auto Repair Shop",
-                "description": "Front bumper repair and replacement"
+                "document_classification": {
+                    "category": "unknown",
+                    "structure": "unknown",
+                    "has_tables": False,
+                    "has_line_items": False,
+                    "primary_content_type": "unknown"
+                },
+                "extracted_fields": {},
+                "metadata": {
+                    "confidence": 0.0,
+                    "extraction_method": "failed",
+                    "notes": "Document extraction failed: ADK agent not available. Please check GOOGLE_AI_API_KEY or GOOGLE_API_KEY environment variable."
+                },
+                "extraction_failed": True,
+                "error": "AGENT_UNAVAILABLE"
             },
-            "valid": True,
-            "confidence": 0.85,
-            "verification_id": f"mock_doc_{claim_id}"
+            "valid": False,
+            "confidence": 0.0,
+            "verification_id": None,
+            "error": "Document extraction failed: ADK agent unavailable"
         }

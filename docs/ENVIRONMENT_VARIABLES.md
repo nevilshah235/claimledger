@@ -24,6 +24,10 @@ CIRCLE_GATEWAY_API_KEY=your_gateway_api_key_here
 # Google AI (for agent evaluation)
 GOOGLE_API_KEY=your_google_api_key_here
 
+# Agent Model Configuration (optional)
+# Default: gemini-2.0-flash
+AGENT_MODEL=gemini-2.0-flash
+
 # Arc Blockchain
 ARC_RPC_URL=https://rpc.testnet.arc.network
 CLAIM_ESCROW_ADDRESS=0x80794995149E5d26F22c36eD56B817CBd8E5d4Fa
@@ -185,6 +189,10 @@ CIRCLE_GATEWAY_API_KEY=TEST_API_KEY:your_key_here
 
 # Google AI (for agent evaluation)
 GOOGLE_API_KEY=your_google_api_key_here
+
+# Agent Model Configuration (optional)
+# Default: gemini-2.0-flash
+AGENT_MODEL=gemini-2.0-flash
 
 # Arc Blockchain
 ARC_RPC_URL=https://rpc.testnet.arc.network
