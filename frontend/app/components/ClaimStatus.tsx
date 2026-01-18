@@ -1,9 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, Button, Badge } from './ui';
 import { VerificationSteps } from './VerificationSteps';
-import { Claim, VerificationStep } from '@/lib/types';
+import { SummaryCard } from './SummaryCard';
+import { AgentResultsBreakdown } from './AgentResultsBreakdown';
+import { ReviewReasonsList } from './ReviewReasonsList';
+import { EvaluationProgress } from './EvaluationProgress';
+import { DataRequestCard } from './DataRequestCard';
+import { ExtractedInfoSummary } from './ExtractedInfoSummary';
+import { Claim, VerificationStep, EvaluationResult, AgentResult } from '@/lib/types';
 import { api } from '@/lib/api';
 
 interface ClaimStatusProps {
@@ -14,33 +20,166 @@ interface ClaimStatusProps {
 export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
   const [evaluating, setEvaluating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'summary' | 'detailed'>('summary');
+  const [evaluationResult, setEvaluationResult] = useState<EvaluationResult | null>(null);
+  const [showProgress, setShowProgress] = useState(false);
+  const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
 
-  // Determine verification steps based on status
+  // Fetch evaluation result when claim is evaluated and we don't have it yet
+  useEffect(() => {
+    const shouldFetchResult = 
+      claim.status !== 'SUBMITTED' && 
+      claim.status !== 'EVALUATING' && 
+      !evaluationResult &&
+      (claim.decision || claim.confidence !== null);
+    
+    if (shouldFetchResult) {
+      // Try to get evaluation result from agent results endpoint
+      api.agent.getResults(claim.id)
+        .then(() => {
+          // Results exist, component will fetch them
+        })
+        .catch(() => {
+          // Results might not exist yet, that's okay
+          console.log('Agent results not available yet');
+        });
+    }
+  }, [claim.id, claim.status, claim.decision, claim.confidence, evaluationResult]);
+
+  // Fetch agent results for extracted info summary
+  useEffect(() => {
+    if (claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING') {
+      api.agent.getResults(claim.id)
+        .then((response) => {
+          setAgentResults(response.agent_results || []);
+        })
+        .catch(() => {
+          // Results might not exist yet, that's okay
+          setAgentResults([]);
+        });
+    }
+  }, [claim.id, claim.status]);
+
+  // Determine verification steps based on actual agent results and status
   const getVerificationSteps = (): VerificationStep[] => {
-    const isEvaluated = ['APPROVED', 'SETTLED', 'REJECTED', 'NEEDS_REVIEW'].includes(claim.status);
-    return [
-      { type: 'document', label: 'Document', price: 0.10, completed: isEvaluated },
-      { type: 'image', label: 'Image', price: 0.15, completed: isEvaluated },
-      { type: 'fraud', label: 'Fraud', price: 0.10, completed: isEvaluated },
-    ];
+    const isEvaluated = ['APPROVED', 'SETTLED', 'REJECTED', 'NEEDS_REVIEW', 'AWAITING_DATA'].includes(claim.status);
+    
+    // Get actual agent results to determine which steps were used
+    const steps: VerificationStep[] = [];
+    
+    // Only show steps for agents that actually ran (based on tool calls or agent results)
+    if (evaluationResult?.tool_calls) {
+      const toolNames = evaluationResult.tool_calls.map(tc => tc.tool_name);
+      
+      if (toolNames.includes('verify_document')) {
+        const toolCall = evaluationResult.tool_calls.find(tc => tc.tool_name === 'verify_document');
+        steps.push({
+          type: 'document',
+          label: 'Document',
+          price: toolCall?.cost || 0.10,
+          completed: isEvaluated
+        });
+      }
+      
+      if (toolNames.includes('verify_image')) {
+        const toolCall = evaluationResult.tool_calls.find(tc => tc.tool_name === 'verify_image');
+        steps.push({
+          type: 'image',
+          label: 'Image',
+          price: toolCall?.cost || 0.15,
+          completed: isEvaluated
+        });
+      }
+      
+      // Fraud check always runs
+      if (toolNames.includes('verify_fraud')) {
+        const toolCall = evaluationResult.tool_calls.find(tc => tc.tool_name === 'verify_fraud');
+        steps.push({
+          type: 'fraud',
+          label: 'Fraud',
+          price: toolCall?.cost || 0.10,
+          completed: isEvaluated
+        });
+      }
+    } else {
+      // Fallback: show all steps if no tool calls available yet
+      steps.push(
+        { type: 'document', label: 'Document', price: 0.10, completed: isEvaluated },
+        { type: 'image', label: 'Image', price: 0.15, completed: isEvaluated },
+        { type: 'fraud', label: 'Fraud', price: 0.10, completed: isEvaluated }
+      );
+    }
+    
+    return steps;
   };
 
   const handleEvaluate = async () => {
     setEvaluating(true);
     setError(null);
+    setShowProgress(true); // Show progress immediately
 
     try {
-      const result = await api.agent.evaluate(claim.id);
+      // Immediately update local state to show EVALUATING status
+      // This ensures the progress component appears right away
+      const evaluatingClaim = { ...claim, status: 'EVALUATING' as const };
+      onUpdate(evaluatingClaim);
+
+      // Trigger evaluation asynchronously (don't wait for it)
+      // The progress component will poll for updates
+      api.agent.evaluate(claim.id)
+        .then((result) => {
+          setEvaluationResult(result);
+          // Poll will pick up the status change
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : 'Evaluation failed');
+          // Reset to previous status on error
+          onUpdate(claim);
+          setShowProgress(false);
+          setEvaluating(false);
+        });
       
-      // Fetch updated claim
-      const updatedClaim = await api.claims.get(claim.id);
-      onUpdate(updatedClaim);
+      // Keep progress showing - it will be hidden when status changes
+      // The EvaluationProgress component will call onComplete when done
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Evaluation failed');
-    } finally {
+      setError(err instanceof Error ? err.message : 'Failed to start evaluation');
+      setShowProgress(false);
       setEvaluating(false);
     }
   };
+
+  const handleEvaluationComplete = async () => {
+    // Refresh claim data when evaluation completes
+    try {
+      const updatedClaim = await api.claims.get(claim.id);
+      onUpdate(updatedClaim);
+      setShowProgress(false);
+      setEvaluating(false);
+    } catch (err) {
+      console.error('Failed to refresh claim:', err);
+      setShowProgress(false);
+      setEvaluating(false);
+    }
+  };
+
+  // Poll for updates when evaluating
+  useEffect(() => {
+    if (claim.status === 'EVALUATING') {
+      const interval = setInterval(async () => {
+        try {
+          const updatedClaim = await api.claims.get(claim.id);
+          if (updatedClaim.status !== 'EVALUATING') {
+            clearInterval(interval);
+            onUpdate(updatedClaim);
+          }
+        } catch (err) {
+          console.error('Failed to poll claim status:', err);
+        }
+      }, 2000);
+
+      return () => clearInterval(interval);
+    }
+  }, [claim.status, claim.id, onUpdate]);
 
   const formatAddress = (address: string) => {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -83,61 +222,143 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
           </div>
         </div>
 
-        {/* Verification Steps */}
-        <VerificationSteps 
-          steps={getVerificationSteps()}
-          totalCost={claim.processing_costs || 0.35}
-        />
+        {/* Evaluation Progress (during evaluation) */}
+        {(claim.status === 'EVALUATING' || showProgress) && (
+          <EvaluationProgress claimId={claim.id} onComplete={handleEvaluationComplete} />
+        )}
 
-        {/* AI Confidence (if evaluated) */}
-        {claim.confidence !== null && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-slate-400">AI Confidence</span>
-              <span className="text-sm font-medium text-white">
-                {Math.round(claim.confidence * 100)}%
-              </span>
-            </div>
-            <div className="confidence-meter">
-              <div 
-                className="confidence-fill"
-                style={{ width: `${claim.confidence * 100}%` }}
+        {/* View Toggle (when evaluated) */}
+        {claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING' && (
+          <div className="flex items-center gap-2 p-1 rounded-lg bg-slate-800/50 w-fit">
+            <button
+              onClick={() => setViewMode('summary')}
+              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                viewMode === 'summary'
+                  ? 'bg-cyan-500 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Summary
+            </button>
+            <button
+              onClick={() => setViewMode('detailed')}
+              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                viewMode === 'detailed'
+                  ? 'bg-cyan-500 text-white'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Detailed
+            </button>
+          </div>
+        )}
+
+        {/* Summary View */}
+        {viewMode === 'summary' && claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING' && (
+          <>
+            <SummaryCard
+              confidence={claim.confidence}
+              decision={claim.decision}
+              summary={evaluationResult?.summary || null}
+              approvedAmount={claim.approved_amount}
+              processingCosts={claim.processing_costs}
+              humanReviewRequired={claim.human_review_required}
+            />
+
+            {/* Extracted Information Summary */}
+            {agentResults.length > 0 && (
+              <ExtractedInfoSummary agentResults={agentResults} />
+            )}
+
+            {/* Review Reasons */}
+            {(claim.decision === 'NEEDS_REVIEW' || 
+              claim.decision === 'APPROVED_WITH_REVIEW' ||
+              claim.human_review_required) && (
+              <ReviewReasonsList
+                reviewReasons={evaluationResult?.review_reasons || null}
+                humanReviewRequired={claim.human_review_required}
               />
-            </div>
-          </div>
+            )}
+
+            {/* Transaction Hash (if settled) */}
+            {claim.tx_hash && (
+              <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+                <p className="text-sm text-slate-400 mb-2">Settlement Transaction</p>
+                <div className="flex items-center justify-between">
+                  <code className="text-sm font-mono text-cyan-400">
+                    {claim.tx_hash.slice(0, 20)}...
+                  </code>
+                  <a
+                    href={`https://testnet.arcscan.app/tx/${claim.tx_hash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-sm text-cyan-400 hover:text-cyan-300 transition-colors"
+                  >
+                    View on Explorer
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* Tool Calls Summary */}
+            {evaluationResult?.tool_calls && evaluationResult.tool_calls.length > 0 && (
+              <div className="p-4 rounded-lg bg-slate-800/50">
+                <p className="text-sm font-medium text-slate-400 mb-2">Tool Calls:</p>
+                <div className="space-y-1">
+                  {evaluationResult.tool_calls.map((toolCall, index) => (
+                    <div key={index} className="flex items-center justify-between text-sm">
+                      <span className="text-slate-300">
+                        {toolCall.status === 'completed' && '✓ '}
+                        {toolCall.tool_name}
+                        {toolCall.cost !== null && toolCall.cost !== undefined && (
+                          <span className="text-cyan-400 ml-2">
+                            - ${toolCall.cost.toFixed(2)} USDC
+                          </span>
+                        )}
+                      </span>
+                      <span className={`text-xs ${
+                        toolCall.status === 'completed' ? 'text-green-400' :
+                        toolCall.status === 'pending' ? 'text-yellow-400' :
+                        'text-red-400'
+                      }`}>
+                        {toolCall.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
-        {/* Approved Amount (if approved) */}
-        {claim.approved_amount && (
-          <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
-            <p className="text-sm text-emerald-400 mb-1">Approved Amount</p>
-            <p className="text-xl font-bold text-emerald-400">
-              {formatCurrency(claim.approved_amount)} USDC
-            </p>
-          </div>
+        {/* Detailed View */}
+        {viewMode === 'detailed' && claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING' && (
+          <AgentResultsBreakdown
+            claimId={claim.id}
+            toolCalls={evaluationResult?.tool_calls}
+          />
         )}
 
-        {/* Transaction Hash (if settled) */}
-        {claim.tx_hash && (
-          <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-            <p className="text-sm text-slate-400 mb-2">Settlement Transaction</p>
-            <div className="flex items-center justify-between">
-              <code className="text-sm font-mono text-cyan-400">
-                {claim.tx_hash.slice(0, 20)}...
-              </code>
-              <a
-                href={`https://testnet.arcscan.app/tx/${claim.tx_hash}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-sm text-cyan-400 hover:text-cyan-300 transition-colors"
-              >
-                View on Explorer
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-              </a>
-            </div>
-          </div>
+        {/* Data Request Card */}
+        {(claim.status === 'AWAITING_DATA' || 
+          claim.decision === 'NEEDS_MORE_DATA' || 
+          claim.decision === 'INSUFFICIENT_DATA') && (
+          <DataRequestCard
+            claimId={claim.id}
+            requestedData={claim.requested_data}
+            onFilesUploaded={handleEvaluationComplete}
+          />
+        )}
+
+        {/* Verification Steps - Only show steps that were actually used */}
+        {getVerificationSteps().length > 0 && (
+          <VerificationSteps 
+            steps={getVerificationSteps()}
+            totalCost={claim.processing_costs || 0}
+          />
         )}
 
         {/* Error */}
@@ -146,20 +367,10 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
             <p className="text-sm text-red-400">{error}</p>
           </div>
         )}
-
-        {/* Processing Cost */}
-        {claim.processing_costs && (
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-slate-400">Total Processing Cost</span>
-            <span className="font-medium text-cyan-400">
-              {formatCurrency(claim.processing_costs)} USDC
-            </span>
-          </div>
-        )}
       </CardContent>
 
       {/* Actions */}
-      {claim.status === 'SUBMITTED' && (
+      {(claim.status === 'SUBMITTED' || claim.status === 'AWAITING_DATA') && (
         <CardFooter>
           <Button
             className="w-full"

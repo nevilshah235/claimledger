@@ -21,7 +21,7 @@ class ADKFraudAgent:
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash-exp")
+        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash")
         self.agent = None
         
         if not ADK_AVAILABLE:
@@ -32,45 +32,55 @@ class ADKFraudAgent:
             print("⚠️  Warning: GOOGLE_AI_API_KEY or GOOGLE_API_KEY not set")
             return
         
+        # Ensure GOOGLE_API_KEY is set for ADK (ADK uses GOOGLE_API_KEY internally)
+        if not os.getenv("GOOGLE_API_KEY") and self.api_key:
+            os.environ["GOOGLE_API_KEY"] = self.api_key
+        
         try:
             # Import ADK tools
             from ..adk_tools import get_adk_tools
             
             # Create ADK LlmAgent for fraud detection
+            # ADK reads GOOGLE_API_KEY from environment automatically
             self.agent = LlmAgent(
                 model=self.model_name,
                 name="fraud_agent",
                 description="Specialized agent for detecting fraud patterns and risk factors in insurance claims",
-                instruction="""You are an insurance claim fraud detection agent.
-
-Your job is to analyze insurance claims for fraud indicators and risk factors.
+                instruction="""You are an insurance claim fraud detection agent. Your job is to detect fraud patterns and risk factors.
 
 **Process:**
-1. First, call verify_fraud(claim_id) tool to get fraud analysis
-   - This tool costs $0.10 USDC and handles payment automatically via x402
-   - The tool will check for fraud indicators and patterns
-2. Review claim details (amount, claimant, evidence)
-3. Check for inconsistencies between claim amount and evidence
-4. Identify suspicious patterns (timing, amounts, frequency)
-5. Assess evidence authenticity concerns
-6. Detect unusual claim characteristics
-7. Return structured JSON with fraud assessment
+1. Analyze claim data and evidence for fraud indicators
+2. Extract bill/line item information if available (use document agent results)
+3. Compare amounts and check for inconsistencies
+4. Identify fraud patterns and risk factors
+5. Return structured fraud assessment
 
-**Important:**
-- You have access to verify_fraud tool - use it to get fraud analysis
-- The tool handles payment automatically, you don't need to worry about payment processing
-- Combine tool results with your own analysis for best results
+**Fraud Indicators to Detect:**
+- Amount mismatches: claim_amount vs extracted amounts, document vs image estimates
+- Suspicious patterns: timing, frequency, unusual characteristics
+- Evidence inconsistencies: contradictions between different evidence sources
+- Overpriced items: line items significantly above typical market rates (>20%)
+- Invalid/irrelevant items: parts or services not applicable to claim type
+- Duplicate charges: same item charged multiple times
+
+**Bill Analysis (if line items available):**
+- Extract line items: item name, quantity, unit_price, total
+- Compare extracted_total vs claim_amount
+- Compare extracted_total vs document agent's extracted amount
+- Flag overpriced items (>20% above typical rates)
+- Flag invalid/irrelevant items
 
 **Output Format:**
-Return a JSON object with:
-- fraud_score: float (0.0-1.0, where 0.0 = no fraud, 1.0 = high fraud risk)
-- risk_level: string (LOW if score < 0.3, MEDIUM if 0.3-0.7, HIGH if > 0.7)
-- indicators: array of strings (specific fraud indicators found, empty if none)
-- confidence: float (0.0-1.0, confidence in the analysis)
-- notes: string (explanation of the assessment)
+Return JSON with:
+- fraud_score: float (0.0-1.0, 0.0 = no fraud, 1.0 = high fraud risk)
+- risk_level: string (LOW if < 0.3, MEDIUM if 0.3-0.7, HIGH if > 0.7)
+- indicators: array of strings (specific fraud indicators found)
+- confidence: float (0.0-1.0)
+- notes: string (explanation)
+- bill_analysis: object (optional, if line items available) with extracted_total, recommended_amount, line_items, mismatches
 
-Be thorough in identifying potential fraud while avoiding false positives.""",
-                tools=get_adk_tools(),  # Include all ADK tools
+Focus on fraud pattern detection. Use document agent results for bill analysis when available.""",
+                tools=[],  # Fraud agent focuses on pattern detection, verification handled by orchestrator
             )
         except Exception as e:
             print(f"Failed to initialize ADK FraudAgent: {e}")
@@ -100,7 +110,9 @@ Be thorough in identifying potential fraud while avoiding false positives.""",
                 "risk_level": str (LOW, MEDIUM, HIGH),
                 "indicators": list of fraud indicators,
                 "confidence": float,
-                "check_id": str
+                "notes": str,
+                "check_id": str,
+                "bill_analysis": dict (optional, with extracted_total, recommended_amount, line_items, etc.)
             }
         """
         if not self.agent:
@@ -180,18 +192,28 @@ Be thorough in identifying potential fraud while avoiding false positives.""",
 
 {context}
 
-Check for:
-1. Inconsistencies between claim amount and evidence
-2. Suspicious patterns (timing, amounts, frequency)
-3. Evidence authenticity concerns
-4. Unusual claim characteristics
+**Your Tasks:**
+1. Check for fraud patterns:
+   - Amount mismatches (claim_amount vs evidence amounts)
+   - Evidence inconsistencies
+   - Suspicious patterns (timing, frequency, unusual characteristics)
 
-Return a JSON object with:
-- fraud_score: float (0.0-1.0, where 0.0 = no fraud, 1.0 = high fraud risk)
-- risk_level: string (LOW if score < 0.3, MEDIUM if 0.3-0.7, HIGH if > 0.7)
-- indicators: array of strings (specific fraud indicators found, empty if none)
-- confidence: float (0.0-1.0, confidence in the analysis)
-- notes: string (explanation of the assessment)"""
+2. If bill/line items are available (from document agent):
+   - Extract line items: item, quantity, unit_price, total
+   - Compare extracted_total vs claim_amount
+   - Compare extracted_total vs document agent's extracted amount
+   - Flag overpriced items (>20% above typical rates)
+   - Flag invalid/irrelevant items
+
+3. Return fraud assessment with indicators and risk level
+
+Return JSON with:
+- fraud_score: float (0.0-1.0, 0.0 = no fraud, 1.0 = high fraud risk)
+- risk_level: string (LOW if < 0.3, MEDIUM if 0.3-0.7, HIGH if > 0.7)
+- indicators: array of strings (specific fraud indicators found)
+- confidence: float (0.0-1.0)
+- notes: string (explanation)
+- bill_analysis: object (optional) with extracted_total, recommended_amount, line_items, mismatches"""
         
         # Create user message
         user_message = types.Content(
@@ -206,10 +228,15 @@ Return a JSON object with:
             agent=self.agent
         )
         
+        # Ensure session exists before using it
+        user_id = f"claim_{claim_id}"
+        session_id = f"fraud_analysis_{claim_id}"
+        await runtime.get_or_create_session(user_id, session_id)
+        
         response_text = ""
         async for event in runner.run_async(
-            user_id=f"claim_{claim_id}",
-            session_id=f"fraud_analysis_{claim_id}",
+            user_id=user_id,
+            session_id=session_id,
             new_message=user_message
         ):
             if event.content and event.content.parts:
@@ -223,14 +250,34 @@ Return a JSON object with:
         import json
         import re
         
-        json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-        if json_match:
-            try:
-                result = json.loads(json_match.group())
-            except:
-                result = self._parse_text_response(response_text)
-        else:
+        # Improved JSON parsing for nested JSON
+        json_match = None
+        patterns = [
+            r'```json\s*(\{.*?\})\s*```',  # JSON code blocks
+            r'```\s*(\{.*?\})\s*```',  # Code blocks without json tag
+            r'\{.*\}',  # Simple pattern for nested JSON
+        ]
+        
+        for pattern in patterns:
+            json_match = re.search(pattern, response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1) if json_match.lastindex else json_match.group(0)
+                try:
+                    result = json.loads(json_str)
+                    break
+                except json.JSONDecodeError:
+                    continue
+        
+        if not json_match or 'result' not in locals():
             result = self._parse_text_response(response_text)
+        
+        # Validate against schema
+        from ..adk_schemas import validate_against_schema, FRAUD_SCHEMA
+        is_valid, validation_errors = validate_against_schema(result, FRAUD_SCHEMA)
+        if not is_valid:
+            print(f"   └─ ⚠️  Schema validation errors: {', '.join(validation_errors[:3])}")
+            # Fix common issues
+            result = self._fix_schema_issues(result, validation_errors)
         
         # Ensure fraud_score is in valid range
         fraud_score = max(0.0, min(1.0, float(result.get("fraud_score", 0.5))))
@@ -249,8 +296,31 @@ Return a JSON object with:
             "indicators": result.get("indicators", []),
             "confidence": result.get("confidence", 0.8),
             "notes": result.get("notes", ""),
-            "check_id": f"fraud_{claim_id}"
+            "check_id": f"fraud_{claim_id}",
+            "bill_analysis": result.get("bill_analysis")  # Include bill analysis if present
         }
+    
+    def _fix_schema_issues(self, data: Dict[str, Any], errors: List[str]) -> Dict[str, Any]:
+        """Fix common schema validation issues."""
+        # Ensure required fields exist
+        if "fraud_score" not in data:
+            data["fraud_score"] = 0.5
+        if "risk_level" not in data:
+            data["risk_level"] = "MEDIUM"
+        if "indicators" not in data:
+            data["indicators"] = []
+        if "confidence" not in data:
+            data["confidence"] = 0.8
+        if "notes" not in data:
+            data["notes"] = ""
+        
+        # Ensure types are correct
+        data["fraud_score"] = float(data.get("fraud_score", 0.5))
+        data["confidence"] = float(data.get("confidence", 0.8))
+        data["fraud_score"] = max(0.0, min(1.0, data["fraud_score"]))
+        data["confidence"] = max(0.0, min(1.0, data["confidence"]))
+        
+        return data
     
     def _parse_text_response(self, text: str) -> Dict[str, Any]:
         """Parse text response when JSON extraction fails."""

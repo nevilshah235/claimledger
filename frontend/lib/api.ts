@@ -11,7 +11,10 @@ import {
   LoginRequest,
   LoginResponse,
   UserInfo,
-  WalletInfo
+  WalletInfo,
+  AgentResultsResponse,
+  EvaluationStatus,
+  AgentLogsResponse
 } from './types';
 
 // API Configuration
@@ -121,6 +124,21 @@ export const api = {
       return fetchAPI<EvaluationResult>(`/agent/evaluate/${claimId}`, {
         method: 'POST',
       });
+    },
+
+    // Get agent results for a claim
+    getResults: async (claimId: string): Promise<AgentResultsResponse> => {
+      return fetchAPI<AgentResultsResponse>(`/agent/results/${claimId}`);
+    },
+
+    // Get evaluation status for real-time progress
+    getStatus: async (claimId: string): Promise<EvaluationStatus> => {
+      return fetchAPI<EvaluationStatus>(`/agent/status/${claimId}`);
+    },
+
+    // Get agent activity logs
+    getLogs: async (claimId: string): Promise<AgentLogsResponse> => {
+      return fetchAPI<AgentLogsResponse>(`/agent/logs/${claimId}`);
     },
   },
 

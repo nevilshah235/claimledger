@@ -22,7 +22,7 @@ class ADKImageAgent:
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash-exp")
+        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash")
         self.agent = None
         
         if not ADK_AVAILABLE:
@@ -33,11 +33,16 @@ class ADKImageAgent:
             print("⚠️  Warning: GOOGLE_AI_API_KEY or GOOGLE_API_KEY not set")
             return
         
+        # Ensure GOOGLE_API_KEY is set for ADK (ADK uses GOOGLE_API_KEY internally)
+        if not os.getenv("GOOGLE_API_KEY") and self.api_key:
+            os.environ["GOOGLE_API_KEY"] = self.api_key
+        
         try:
             # Import ADK tools
             from ..adk_tools import get_adk_tools
             
             # Create ADK LlmAgent with multimodal support
+            # ADK reads GOOGLE_API_KEY from environment automatically
             self.agent = LlmAgent(
                 model=self.model_name,
                 name="image_agent",
@@ -205,6 +210,11 @@ Return a JSON object with:
                 agent=self.agent
             )
             
+            # Ensure session exists before using it
+            user_id = f"claim_{claim_id}"
+            session_id = f"img_analysis_{claim_id}"
+            await runtime.get_or_create_session(user_id, session_id)
+            
             # Create user message with multimodal content
             user_message = types.Content(
                 role="user",
@@ -214,8 +224,8 @@ Return a JSON object with:
             # Run agent and collect response
             response_text = ""
             async for event in runner.run_async(
-                user_id=f"claim_{claim_id}",
-                session_id=f"img_analysis_{claim_id}",
+                user_id=user_id,
+                session_id=session_id,
                 new_message=user_message
             ):
                 if event.content and event.content.parts:

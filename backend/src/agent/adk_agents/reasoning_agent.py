@@ -5,7 +5,7 @@ Converts the original ReasoningAgent to use ADK LlmAgent for evidence correlatio
 """
 
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List
 from decimal import Decimal
 
 try:
@@ -21,7 +21,7 @@ class ADKReasoningAgent:
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash-exp")
+        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash")
         self.agent = None
         
         if not ADK_AVAILABLE:
@@ -32,38 +32,62 @@ class ADKReasoningAgent:
             print("⚠️  Warning: GOOGLE_AI_API_KEY or GOOGLE_API_KEY not set")
             return
         
+        # Ensure GOOGLE_API_KEY is set for ADK (ADK uses GOOGLE_API_KEY internally)
+        if not os.getenv("GOOGLE_API_KEY") and self.api_key:
+            os.environ["GOOGLE_API_KEY"] = self.api_key
+        
         try:
             # Import ADK tools
             from ..adk_tools import get_adk_tools
             
             # Create ADK LlmAgent for reasoning
+            # ADK reads GOOGLE_API_KEY from environment automatically
             self.agent = LlmAgent(
                 model=self.model_name,
                 name="reasoning_agent",
                 description="Specialized agent for correlating evidence and performing final reasoning on claim evaluation",
-                instruction="""You are an insurance claim reasoning agent.
-
-Your job is to correlate evidence from all specialized agents and provide a comprehensive assessment.
+                instruction="""You are an insurance claim reasoning agent. Correlate evidence from all agents and detect contradictions.
 
 **Process:**
-1. Correlate evidence from all agents (document, image, fraud)
-2. Detect contradictions between different evidence sources
+1. Correlate evidence from document, image, and fraud agents
+2. Detect contradictions between evidence sources
 3. Calculate overall confidence (0.0-1.0)
-4. Identify missing evidence that would improve confidence
-5. Assess fraud risk based on all evidence
-6. Return structured JSON with your assessment
+4. Assess fraud risk based on all evidence
+5. Identify missing evidence that would improve confidence
+
+**Correlation Rules:**
+- Document amount should match image estimated cost (within ±20%)
+- Claim amount should align with extracted amounts from evidence
+- Fraud indicators should be consistent across all evidence
+- Confidence increases when multiple evidence sources agree
+
+**Contradiction Detection Examples:**
+Example 1: Amount mismatch
+- Document: $1,000 invoice
+- Image: $500 estimated damage
+- Contradiction: "Document amount ($1,000) differs significantly from image estimated cost ($500)"
+
+Example 2: Claim vs evidence mismatch
+- Claim amount: $2,000
+- Document amount: $1,500
+- Contradiction: "Claim amount ($2,000) differs from document amount ($1,500)"
+
+Example 3: Fraud risk inconsistency
+- Document: Valid, low fraud indicators
+- Fraud agent: High fraud score (0.8)
+- Contradiction: "High fraud risk (0.8) contradicts valid document evidence"
 
 **Output Format:**
-Return a JSON object with:
-- final_confidence: float (0.0-1.0, overall confidence in claim validity)
-- contradictions: array of strings (any contradictions found, empty if none)
-- fraud_risk: float (0.0-1.0, overall fraud risk assessment)
-- missing_evidence: array of strings (types of evidence that would help, empty if sufficient)
-- reasoning: string (detailed explanation of your assessment)
-- evidence_gaps: array of strings (specific gaps in evidence, empty if none)
+Return JSON with:
+- final_confidence: float (0.0-1.0)
+- contradictions: array of strings (specific contradictions found)
+- fraud_risk: float (0.0-1.0)
+- missing_evidence: array of strings (evidence types that would help)
+- reasoning: string (detailed explanation)
+- evidence_gaps: array of strings (specific gaps in evidence)
 
-Be thorough in your correlation and reasoning.""",
-                tools=get_adk_tools(),  # Include all ADK tools
+Be thorough in correlation and contradiction detection.""",
+                tools=[],  # Reasoning agent correlates results, no tool calling needed
             )
         except Exception as e:
             print(f"Failed to initialize ADK ReasoningAgent: {e}")
@@ -118,24 +142,29 @@ Be thorough in your correlation and reasoning.""",
         # Build context
         context = self._build_reasoning_context(claim_id, claim_amount, agent_results)
         
-        prompt = f"""You are an insurance claim reasoning agent. Analyze the following agent results and provide a comprehensive assessment:
+        prompt = f"""Analyze agent results and correlate evidence:
 
 {context}
 
-Your task:
-1. Correlate evidence from all agents
-2. Detect contradictions between different evidence sources
-3. Calculate overall confidence (0.0-1.0)
-4. Identify missing evidence that would improve confidence
-5. Assess fraud risk based on all evidence
+**Correlation Tasks:**
+1. Compare amounts: document vs image vs claim_amount (flag if >20% difference)
+2. Check consistency: fraud indicators vs evidence validity
+3. Detect contradictions: specific mismatches between evidence sources
+4. Calculate confidence: weighted average based on evidence quality and agreement
+5. Assess fraud risk: combine fraud agent score with evidence inconsistencies
 
-Return a JSON object with:
-- final_confidence: float (0.0-1.0, overall confidence in claim validity)
-- contradictions: array of strings (any contradictions found, empty if none)
-- fraud_risk: float (0.0-1.0, overall fraud risk assessment)
-- missing_evidence: array of strings (types of evidence that would help, empty if sufficient)
-- reasoning: string (detailed explanation of your assessment)
-- evidence_gaps: array of strings (specific gaps in evidence, empty if none)"""
+**Contradiction Examples:**
+- Amount mismatch: "Document amount ($X) differs from image estimate ($Y)"
+- Claim mismatch: "Claim amount ($X) differs from evidence amounts ($Y)"
+- Fraud inconsistency: "High fraud risk contradicts valid evidence"
+
+Return JSON with:
+- final_confidence: float (0.0-1.0)
+- contradictions: array of strings (specific contradictions)
+- fraud_risk: float (0.0-1.0)
+- missing_evidence: array of strings
+- reasoning: string (detailed explanation)
+- evidence_gaps: array of strings"""
         
         # Create user message
         user_message = types.Content(
@@ -150,10 +179,15 @@ Return a JSON object with:
             agent=self.agent
         )
         
+        # Ensure session exists before using it
+        user_id = f"claim_{claim_id}"
+        session_id = f"reasoning_{claim_id}"
+        await runtime.get_or_create_session(user_id, session_id)
+        
         response_text = ""
         async for event in runner.run_async(
-            user_id=f"claim_{claim_id}",
-            session_id=f"reasoning_{claim_id}",
+            user_id=user_id,
+            session_id=session_id,
             new_message=user_message
         ):
             if event.content and event.content.parts:
@@ -167,14 +201,34 @@ Return a JSON object with:
         import json
         import re
         
-        json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-        if json_match:
-            try:
-                result = json.loads(json_match.group())
-            except:
-                result = self._parse_text_response(response_text, agent_results)
-        else:
+        # Improved JSON parsing for nested JSON
+        json_match = None
+        patterns = [
+            r'```json\s*(\{.*?\})\s*```',  # JSON code blocks
+            r'```\s*(\{.*?\})\s*```',  # Code blocks without json tag
+            r'\{.*\}',  # Simple pattern for nested JSON
+        ]
+        
+        for pattern in patterns:
+            json_match = re.search(pattern, response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1) if json_match.lastindex else json_match.group(0)
+                try:
+                    result = json.loads(json_str)
+                    break
+                except json.JSONDecodeError:
+                    continue
+        
+        if not json_match or 'result' not in locals():
             result = self._parse_text_response(response_text, agent_results)
+        
+        # Validate against schema
+        from ..adk_schemas import validate_against_schema, REASONING_SCHEMA
+        is_valid, validation_errors = validate_against_schema(result, REASONING_SCHEMA)
+        if not is_valid:
+            print(f"   └─ ⚠️  Schema validation errors: {', '.join(validation_errors[:3])}")
+            # Fix common issues
+            result = self._fix_schema_issues(result, validation_errors)
         
         # Ensure values are in valid ranges
         final_confidence = max(0.0, min(1.0, float(result.get("final_confidence", 0.5))))
@@ -241,6 +295,30 @@ Return a JSON object with:
                 context_parts.append(f"  Indicators: {', '.join(fraud_result['indicators'])}")
         
         return "\n".join(context_parts)
+    
+    def _fix_schema_issues(self, data: Dict[str, Any], errors: List[str]) -> Dict[str, Any]:
+        """Fix common schema validation issues."""
+        # Ensure required fields exist
+        if "final_confidence" not in data:
+            data["final_confidence"] = 0.5
+        if "contradictions" not in data:
+            data["contradictions"] = []
+        if "fraud_risk" not in data:
+            data["fraud_risk"] = 0.5
+        if "missing_evidence" not in data:
+            data["missing_evidence"] = []
+        if "reasoning" not in data:
+            data["reasoning"] = ""
+        if "evidence_gaps" not in data:
+            data["evidence_gaps"] = []
+        
+        # Ensure types are correct
+        data["final_confidence"] = float(data.get("final_confidence", 0.5))
+        data["fraud_risk"] = float(data.get("fraud_risk", 0.5))
+        data["final_confidence"] = max(0.0, min(1.0, data["final_confidence"]))
+        data["fraud_risk"] = max(0.0, min(1.0, data["fraud_risk"]))
+        
+        return data
     
     def _parse_text_response(
         self,
