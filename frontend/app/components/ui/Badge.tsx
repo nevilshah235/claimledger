@@ -25,6 +25,7 @@ const statusToVariant: Record<ClaimStatus, BadgeVariant> = {
   SETTLED: 'success',
   REJECTED: 'error',
   NEEDS_REVIEW: 'warning',
+  AWAITING_DATA: 'info',
 };
 
 const statusLabels: Record<ClaimStatus, string> = {
@@ -34,6 +35,7 @@ const statusLabels: Record<ClaimStatus, string> = {
   SETTLED: 'Settled',
   REJECTED: 'Rejected',
   NEEDS_REVIEW: 'Needs Review',
+  AWAITING_DATA: 'Awaiting Data',
 };
 
 export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(
