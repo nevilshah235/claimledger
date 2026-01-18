@@ -24,15 +24,47 @@ except ImportError:
 class ADKOrchestratorAgent:
     """ADK-based orchestrator agent that autonomously calls tools and makes decisions."""
     
-    # Confidence thresholds
+    # Standard error response format
+    @staticmethod
+    def create_error_response(error: str, error_type: str = "AGENT_ERROR") -> Dict[str, Any]:
+        """
+        Create standardized error response.
+        
+        Args:
+            error: Error message
+            error_type: Error type (AGENT_ERROR, API_ERROR, VALIDATION_ERROR, etc.)
+            
+        Returns:
+            Standardized error response dict
+        """
+        return {
+            "success": False,
+            "error": error,
+            "error_type": error_type,
+            "decision": "NEEDS_REVIEW",
+            "confidence": 0.0,
+            "reasoning": f"Error occurred: {error}",
+            "tool_results": {},
+            "requested_data": [],
+            "human_review_required": True,
+            "review_reasons": [f"Agent error: {error}"],
+            "auto_settled": False,
+            "tx_hash": None,
+            "contradictions": [],
+            "fraud_risk": 0.5
+        }
+    
+    # Confidence thresholds (enforced in code)
     AUTO_APPROVE_THRESHOLD = 0.95  # >= 95% confidence: auto-approve
     HIGH_CONFIDENCE_THRESHOLD = 0.85  # >= 85% confidence: can approve with human review
     MEDIUM_CONFIDENCE_THRESHOLD = 0.70  # >= 70% confidence: needs human review
-    LOW_CONFIDENCE_THRESHOLD = 0.50  # < 50% confidence: request more data
+    LOW_CONFIDENCE_THRESHOLD = 0.50  # >= 50% confidence: request more data
+    FRAUD_RISK_THRESHOLD = 0.7  # >= 70% fraud risk: FRAUD_DETECTED
+    FRAUD_RISK_AUTO_APPROVE_MAX = 0.3  # < 30% fraud risk required for auto-approve
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash-exp")
+        self.model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash")
         self.agent = None
         
         if not ADK_AVAILABLE:
@@ -43,65 +75,70 @@ class ADKOrchestratorAgent:
             print("⚠️  Warning: GOOGLE_AI_API_KEY or GOOGLE_API_KEY not set")
             return
         
+        # Ensure GOOGLE_API_KEY is set for ADK (ADK uses GOOGLE_API_KEY internally)
+        if not os.getenv("GOOGLE_API_KEY") and self.api_key:
+            os.environ["GOOGLE_API_KEY"] = self.api_key
+        
         try:
             # Import ADK tools
             from ..adk_tools import get_adk_tools
             
+            # Get tools and verify they're created
+            tools = get_adk_tools()
+            if not tools:
+                print("⚠️  WARNING: No ADK tools available! Orchestrator agent will not be able to call verification tools.")
+            else:
+                tool_names = []
+                for tool in tools:
+                    # Try to get tool name
+                    name = getattr(tool, 'name', None)
+                    if not name:
+                        # FunctionTool might store the function
+                        func = getattr(tool, 'func', None)
+                        if func:
+                            name = getattr(func, '__name__', 'unknown')
+                    tool_names.append(name or 'unknown')
+                print(f"   └─ Orchestrator Agent tools: {', '.join(tool_names)}")
+            
             # Create ADK LlmAgent with tool-calling capabilities
+            # ADK reads GOOGLE_API_KEY from environment automatically
             self.agent = LlmAgent(
                 model=self.model_name,
                 name="orchestrator_agent",
                 description="Main orchestrator agent that evaluates insurance claims by calling verification tools and making decisions",
-                instruction="""You are an insurance claim evaluation orchestrator agent.
+                instruction="""You are an insurance claim evaluation orchestrator. Follow the mandatory 4-layer process.
 
-Your job is to evaluate insurance claims by calling verification tools and making decisions based on confidence thresholds.
+**MANDATORY Tool Calling Sequence (DO NOT SKIP ANY STEP):**
 
-**Process:**
-1. For each claim, you MUST call the appropriate verification tools:
-   - verify_document(claim_id, document_path) - Verify documents ($0.10 USDC)
-   - verify_image(claim_id, image_path) - Analyze images ($0.15 USDC)
-   - verify_fraud(claim_id) - Check fraud indicators ($0.10 USDC)
+STEP 1: Extract Data (ALWAYS FIRST)
+- MUST call extract_document_data(claim_id, document_path) for EACH document
+- MUST call extract_image_data(claim_id, image_path) for EACH image (if available)
 
-2. After collecting all verification results, analyze the evidence and calculate overall confidence.
+STEP 2: Estimate Costs (ALWAYS AFTER EXTRACTION)
+- MUST call estimate_repair_cost(claim_id, extracted_data, damage_assessment)
+- MUST call cross_check_amounts(claim_id, claim_amount, extracted_total, estimated_cost, document_amount)
 
-3. Make a decision based on confidence thresholds:
-   - confidence >= 0.95 AND no contradictions AND fraud_risk < 0.3:
-     → Decision: AUTO_APPROVED
-     → Call approve_claim(claim_id, amount, recipient) to settle automatically
-   
-   - confidence >= 0.85 AND no major contradictions:
-     → Decision: APPROVED_WITH_REVIEW
-     → Flag for human review before settlement
-   
-   - confidence >= 0.70:
-     → Decision: NEEDS_REVIEW
-     → Requires human review, do not auto-approve
-   
-   - confidence >= 0.50:
-     → Decision: NEEDS_MORE_DATA
-     → Request additional evidence from claimant
-   
-   - confidence < 0.50:
-     → Decision: INSUFFICIENT_DATA
-     → Request more data or flag for manual investigation
+STEP 3: Validate Claim (ALWAYS AFTER COST ESTIMATION)
+- MUST call validate_claim_data(claim_id, claim_amount, extracted_data, damage_assessment, cost_analysis, cross_check_result)
 
-**Important Rules:**
-- ALWAYS call verify_document, verify_image, and verify_fraud tools when evidence is available
-- Each tool call costs USDC (handled automatically via x402)
-- Only call approve_claim if confidence >= 0.95, no contradictions, and fraud_risk < 0.3
-- If confidence is below thresholds, clearly state what additional data is needed
-- Be transparent about your reasoning and confidence level
+STEP 4: Verify (ONLY IF VALIDATION PASSES)
+- MUST call verify_document(claim_id, document_path) if documents exist
+- MUST call verify_image(claim_id, image_path) if images exist
+- MUST call verify_fraud(claim_id) - ALWAYS REQUIRED
 
-**Output Format:**
-Return a JSON object with:
-- decision: string (AUTO_APPROVED, APPROVED_WITH_REVIEW, NEEDS_REVIEW, NEEDS_MORE_DATA, INSUFFICIENT_DATA)
-- confidence: float (0.0-1.0)
-- reasoning: string (detailed explanation)
-- tool_results: object (results from all tool calls)
-- requested_data: array of strings (what additional data is needed, empty if none)
-- human_review_required: boolean (true if human review is needed)
-- review_reasons: array of strings (why human review is needed, empty if none)""",
-                tools=get_adk_tools(),  # Include all ADK tools for autonomous calling
+**Amount Validation Process (MANDATORY):**
+1. Extract total_amount from extract_document_data result: Check extracted_fields for total_amount, grand_total, final_total. If not found, calculate: digit_liability + customer_liability.
+2. Call cross_check_amounts with claim_amount, extracted_total, estimated_cost, document_amount.
+3. If matches == false: Add to contradictions. If difference_percent > 20%: Set fraud_risk >= 0.3. If difference_percent > 50%: Set fraud_risk >= 0.7.
+
+**Fraud Detection Guidelines:**
+High Risk (fraud_risk >= 0.7) → FRAUD_DETECTED: Amount mismatch > 50%, missing critical fields, invalid dates, multiple contradictions.
+Medium Risk (0.3 <= fraud_risk < 0.7) → NEEDS_REVIEW: Amount mismatch 20-50%, missing some fields, minor inconsistencies.
+Low Risk (fraud_risk < 0.3) → Can auto-approve if confidence >= 0.95: Amounts match (< 5% difference), all fields present, no contradictions.
+
+**REQUIRED Output Format (JSON ONLY - NO MARKDOWN, NO CODE BLOCKS):**
+Return ONLY valid JSON: {"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEEDS_REVIEW"|"NEEDS_MORE_DATA"|"INSUFFICIENT_DATA"|"FRAUD_DETECTED", "confidence": 0.0-1.0, "reasoning": "Brief explanation", "tool_results": {...}, "requested_data": [], "human_review_required": true|false, "review_reasons": [], "contradictions": [], "fraud_risk": 0.0-1.0}""",
+                tools=tools,  # Include all ADK tools for autonomous calling
             )
         except Exception as e:
             print(f"Failed to initialize ADK OrchestratorAgent: {e}")
@@ -136,15 +173,48 @@ Return a JSON object with:
                 "tx_hash": str | None
             }
         """
+        print(f"\n🤖 [ORCHESTRATOR AGENT] Starting evaluation for claim {claim_id}")
+        print(f"   └─ Agent Type: ADK LlmAgent with autonomous tool-calling")
+        print(f"   └─ Available Tools: verify_document, verify_image, verify_fraud, approve_claim")
+        
         if not self.agent:
+            print(f"   └─ ⚠ Agent not available, using fallback evaluation")
             # Fallback to rule-based evaluation
             return await self._fallback_evaluation(claim_id, claim_amount, claimant_address, evidence)
         
         try:
-            return await self._ai_evaluation_with_tools(claim_id, claim_amount, claimant_address, evidence)
-        except Exception as e:
-            print(f"Error in ADK orchestrator agent: {e}")
+            result = await self._ai_evaluation_with_tools(claim_id, claim_amount, claimant_address, evidence)
+            print(f"   └─ ✅ Evaluation completed successfully")
+            return result
+        except ValueError as e:
+            if "Missing key inputs argument" in str(e) or "api_key" in str(e).lower():
+                print(f"   └─ ❌ API Key Error: {e}")
+                print(f"   └─ Checking API key configuration...")
+                api_key_set = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GOOGLE_AI_API_KEY"))
+                print(f"   └─ GOOGLE_API_KEY set: {bool(os.getenv('GOOGLE_API_KEY'))}")
+                print(f"   └─ GOOGLE_AI_API_KEY set: {bool(os.getenv('GOOGLE_AI_API_KEY'))}")
+                print(f"   └─ Agent has API key: {bool(self.api_key)}")
+                if not api_key_set:
+                    print(f"   └─ ⚠️  Please set GOOGLE_API_KEY or GOOGLE_AI_API_KEY environment variable")
+            else:
+                print(f"   └─ ❌ Error in ADK orchestrator agent: {e}")
+            import traceback
+            traceback.print_exc()
             return await self._fallback_evaluation(claim_id, claim_amount, claimant_address, evidence)
+        except Exception as e:
+            print(f"   └─ ❌ Error in ADK orchestrator agent: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return standardized error response with fallback
+            error_response = self.create_error_response(str(e), "AGENT_ERROR")
+            fallback_result = await self._fallback_evaluation(claim_id, claim_amount, claimant_address, evidence)
+            # Merge fallback with error info
+            error_response.update({
+                "decision": fallback_result.get("decision", "NEEDS_REVIEW"),
+                "confidence": fallback_result.get("confidence", 0.0),
+                "reasoning": f"Error occurred, using fallback: {fallback_result.get('reasoning', '')}"
+            })
+            return error_response
     
     async def _ai_evaluation_with_tools(
         self,
@@ -157,7 +227,19 @@ Return a JSON object with:
         from ..adk_runtime import get_adk_runtime
         
         # Build evidence context
+        print(f"   └─ Building evidence context...")
         evidence_context = self._build_evidence_context(evidence)
+        
+        documents = [e for e in evidence if e.get("file_type") == "document"]
+        images = [e for e in evidence if e.get("file_type") == "image"]
+        print(f"   └─ Evidence breakdown: {len(documents)} document(s), {len(images)} image(s)")
+        
+        # Verify tools are available
+        from ..adk_tools import get_adk_tools
+        tools = get_adk_tools()
+        print(f"   └─ Tools registered: {len(tools)} ({', '.join([t.name if hasattr(t, 'name') else getattr(t, '__name__', 'unknown') for t in tools]) if tools else 'none'})")
+        if not tools:
+            print(f"   └─ ⚠️  WARNING: No tools available! Tool calling will not work.")
         
         prompt = f"""Evaluate this insurance claim:
 
@@ -168,24 +250,40 @@ Claimant Address: {claimant_address}
 Available Evidence:
 {evidence_context}
 
-**Your Task:**
-1. Call the appropriate verification tools for each piece of evidence:
-   - For documents: call verify_document(claim_id, document_path)
-   - For images: call verify_image(claim_id, image_path)
-   - Always call verify_fraud(claim_id) to check fraud indicators
+**MANDATORY Tool Calling Sequence (DO NOT SKIP ANY STEP):**
 
-2. After collecting all tool results, analyze the evidence and calculate overall confidence.
+STEP 1: Extract Data (ALWAYS FIRST)
+- MUST call extract_document_data(claim_id="{claim_id}", document_path="<file_path>") for EACH document
+- MUST call extract_image_data(claim_id="{claim_id}", image_path="<file_path>") for EACH image (if available)
 
-3. Make a decision based on confidence thresholds:
-   - >= 0.95 + no contradictions + fraud_risk < 0.3 → AUTO_APPROVED (call approve_claim)
-   - >= 0.85 → APPROVED_WITH_REVIEW (human review required)
-   - >= 0.70 → NEEDS_REVIEW (human review required)
-   - >= 0.50 → NEEDS_MORE_DATA (request additional evidence)
-   - < 0.50 → INSUFFICIENT_DATA (request more data or manual investigation)
+STEP 2: Estimate Costs (ALWAYS AFTER EXTRACTION)
+- MUST call estimate_repair_cost(claim_id="{claim_id}", extracted_data={{...}}, damage_assessment={{...}})
+- MUST call cross_check_amounts(claim_id="{claim_id}", claim_amount={float(claim_amount)}, extracted_total=..., estimated_cost=..., document_amount=...)
 
-4. Return a JSON object with your decision, confidence, reasoning, and any requested data.
+STEP 3: Validate Claim (ALWAYS AFTER COST ESTIMATION)
+- MUST call validate_claim_data(claim_id="{claim_id}", claim_amount={float(claim_amount)}, extracted_data={{...}}, damage_assessment={{...}}, cost_analysis={{...}}, cross_check_result={{...}})
 
-Remember: You MUST call the verification tools - they handle payments automatically via x402."""
+STEP 4: Verify (ONLY IF VALIDATION PASSES)
+- MUST call verify_document(claim_id="{claim_id}", document_path="<file_path>") if documents exist
+- MUST call verify_image(claim_id="{claim_id}", image_path="<file_path>") if images exist
+- MUST call verify_fraud(claim_id="{claim_id}") - ALWAYS REQUIRED
+
+**Amount Validation Process (MANDATORY):**
+1. Extract total_amount from extract_document_data result: Check extracted_fields for total_amount, grand_total, final_total. If not found, calculate: digit_liability + customer_liability. Store as extracted_total.
+2. Call cross_check_amounts with claim_amount={float(claim_amount)}, extracted_total, estimated_cost, document_amount.
+3. Check cross_check_amounts result: If matches == false, add to contradictions. If difference_percent > 20%, set fraud_risk >= 0.3. If difference_percent > 50%, set fraud_risk >= 0.7.
+4. Flag contradictions: Format as "Claim amount (₹X) differs from extracted total (₹Y) by Z%". Add to contradictions array.
+
+**Fraud Detection Guidelines:**
+High Risk (fraud_risk >= 0.7) → FRAUD_DETECTED: Amount mismatch > 50%, missing critical fields, invalid dates, multiple contradictions.
+Medium Risk (0.3 <= fraud_risk < 0.7) → NEEDS_REVIEW: Amount mismatch 20-50%, missing some fields, minor inconsistencies.
+Low Risk (fraud_risk < 0.3) → Can auto-approve if confidence >= 0.95: Amounts match (< 5% difference), all fields present, no contradictions.
+
+**REQUIRED Output Format (JSON ONLY - NO MARKDOWN, NO CODE BLOCKS):**
+Return ONLY valid JSON matching this exact structure:
+{{"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEEDS_REVIEW"|"NEEDS_MORE_DATA"|"INSUFFICIENT_DATA"|"FRAUD_DETECTED", "confidence": 0.0-1.0, "reasoning": "Brief explanation", "tool_results": {{...}}, "requested_data": [], "human_review_required": true|false, "review_reasons": [], "contradictions": [], "fraud_risk": 0.0-1.0}}
+
+**CRITICAL**: Return ONLY the JSON object. No markdown formatting (no ```json). No code blocks. No explanations outside JSON. All fields are REQUIRED."""
         
         # Create user message
         user_message = types.Content(
@@ -200,48 +298,186 @@ Remember: You MUST call the verification tools - they handle payments automatica
             agent=self.agent
         )
         
+        # Ensure session exists before using it
+        user_id = f"claim_{claim_id}"
+        session_id = f"orchestrator_{claim_id}"
+        await runtime.get_or_create_session(user_id, session_id)
+        
         response_text = ""
         tool_results = {}
+        tool_call_count = 0
+        pending_tool_calls = {}  # Track tool calls by ID to match with responses
+        
+        print(f"   └─ Running orchestrator agent with ADK runtime...")
+        print(f"      └─ Session: {session_id}")
+        print(f"      └─ User: {user_id}")
+        print(f"      └─ Tools available: {len(get_adk_tools())} tool(s)")
+        
+        event_count = 0
         async for event in runner.run_async(
-            user_id=f"claim_{claim_id}",
-            session_id=f"orchestrator_{claim_id}",
+            user_id=user_id,
+            session_id=session_id,
             new_message=user_message
         ):
-            # Collect tool call results
-            if hasattr(event, 'tool_calls') and event.tool_calls:
-                for tool_call in event.tool_calls:
-                    tool_name = tool_call.get('name', 'unknown')
-                    tool_result = tool_call.get('result', {})
-                    tool_results[tool_name] = tool_result
+            event_count += 1
             
-            # Collect text response
+            # Debug: Log event type and structure (only first few events to avoid spam)
+            if event_count <= 3:
+                event_type = type(event).__name__
+                has_get_function_calls = hasattr(event, 'get_function_calls')
+                has_get_function_responses = hasattr(event, 'get_function_responses')
+                has_content = hasattr(event, 'content') and event.content is not None
+                has_parts = has_content and hasattr(event.content, 'parts') and event.content.parts
+                print(f"      └─ Event #{event_count}: {event_type}")
+                print(f"         └─ Methods: get_function_calls={has_get_function_calls}, get_function_responses={has_get_function_responses}")
+                print(f"         └─ Content: has_content={has_content}, has_parts={has_parts}")
+                if has_parts:
+                    part_types = [type(p).__name__ for p in event.content.parts]
+                    print(f"         └─ Part types: {', '.join(part_types)}")
+            
+            # Detect function/tool call requests using ADK's get_function_calls()
+            if hasattr(event, 'get_function_calls'):
+                try:
+                    function_calls = event.get_function_calls()
+                    if function_calls:
+                        for func_call in function_calls:
+                            tool_name = func_call.name if hasattr(func_call, 'name') else getattr(func_call, 'function_name', 'unknown')
+                            tool_args = func_call.args if hasattr(func_call, 'args') else getattr(func_call, 'arguments', {})
+                            call_id = getattr(func_call, 'id', None) or getattr(func_call, 'call_id', None)
+                            
+                            tool_call_count += 1
+                            print(f"      └─ 🔧 Tool Call Request #{tool_call_count}: {tool_name}")
+                            print(f"         └─ Arguments: {tool_args}")
+                            
+                            # Store pending call to match with response
+                            if call_id:
+                                pending_tool_calls[call_id] = {
+                                    'name': tool_name,
+                                    'args': tool_args,
+                                    'requested': True
+                                }
+                except Exception as e:
+                    print(f"      └─ ⚠ Error getting function calls: {e}")
+            
+            # Detect function/tool call responses using ADK's get_function_responses()
+            if hasattr(event, 'get_function_responses'):
+                try:
+                    function_responses = event.get_function_responses()
+                    if function_responses:
+                        for func_response in function_responses:
+                            tool_name = func_response.name if hasattr(func_response, 'name') else getattr(func_response, 'function_name', 'unknown')
+                            tool_result = func_response.response if hasattr(func_response, 'response') else getattr(func_response, 'result', {})
+                            call_id = getattr(func_response, 'id', None) or getattr(func_response, 'call_id', None)
+                            
+                            print(f"      └─ ✅ Tool Response: {tool_name}")
+                            
+                            # Store result
+                            if isinstance(tool_result, dict):
+                                tool_results[tool_name] = tool_result
+                                success = tool_result.get('success', False)
+                                cost = tool_result.get('cost', 0)
+                                status = "✓" if success else "✗"
+                                print(f"         └─ {status} Result: success={success}, cost=${cost:.2f}")
+                            else:
+                                tool_results[tool_name] = {"result": tool_result}
+                                print(f"         └─ Result: {str(tool_result)[:100]}")
+                except Exception as e:
+                    print(f"      └─ ⚠ Error getting function responses: {e}")
+            
+            # Also check content.parts for function_call and function_response
             if event.content and event.content.parts:
                 for part in event.content.parts:
-                    if part.text:
+                    # Check for function_call in parts
+                    if hasattr(part, 'function_call') and part.function_call:
+                        func_call = part.function_call
+                        tool_name = getattr(func_call, 'name', 'unknown')
+                        tool_args = getattr(func_call, 'args', {}) or getattr(func_call, 'arguments', {})
+                        
+                        if tool_name not in [r.get('name') for r in pending_tool_calls.values()]:
+                            tool_call_count += 1
+                            print(f"      └─ 🔧 Tool Call (from parts) #{tool_call_count}: {tool_name}")
+                            print(f"         └─ Arguments: {tool_args}")
+                    
+                    # Check for function_response in parts
+                    if hasattr(part, 'function_response') and part.function_response:
+                        func_resp = part.function_response
+                        tool_name = getattr(func_resp, 'name', 'unknown')
+                        tool_result = getattr(func_resp, 'response', {}) or getattr(func_resp, 'result', {})
+                        
+                        if tool_name not in tool_results:
+                            print(f"      └─ ✅ Tool Response (from parts): {tool_name}")
+                            if isinstance(tool_result, dict):
+                                tool_results[tool_name] = tool_result
+                            else:
+                                tool_results[tool_name] = {"result": tool_result}
+                    
+                    # Collect text response
+                    if hasattr(part, 'text') and part.text:
                         response_text += part.text
             
             if event.is_final_response():
+                print(f"      └─ Final response received (event #{event_count})")
                 break
         
-        # Parse response
-        import json
-        import re
+        print(f"   └─ Total events processed: {event_count}")
         
-        # Try to extract JSON from response
-        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response_text, re.DOTALL)
-        if json_match:
-            try:
-                result = json.loads(json_match.group())
-            except:
-                result = self._parse_text_response(response_text, tool_results)
-        else:
+        print(f"   └─ Agent response received ({len(response_text)} chars)")
+        print(f"   └─ Total tool calls detected: {tool_call_count}")
+        print(f"   └─ Tool results collected: {len(tool_results)} ({', '.join(tool_results.keys()) if tool_results else 'none'})")
+        
+        # Validate tool calls
+        validation_result = self._validate_tool_calls(tool_results, evidence, claim_id)
+        if not validation_result["valid"]:
+            print(f"   └─ ⚠️  Tool validation warnings: {', '.join(validation_result['warnings'])}")
+        
+        # Parse response
+        result = self._parse_json_response(response_text)
+        
+        if not result or "decision" not in result:
+            print(f"   └─ ⚠ No valid JSON found in response, using text fallback")
             result = self._parse_text_response(response_text, tool_results)
         
+        # Validate against schema
+        from ..adk_schemas import validate_against_schema, ORCHESTRATOR_SCHEMA
+        is_valid, validation_errors = validate_against_schema(result, ORCHESTRATOR_SCHEMA)
+        if not is_valid:
+            print(f"   └─ ⚠️  Schema validation errors: {', '.join(validation_errors[:3])}")
+            # Fix common issues
+            result = self._fix_schema_issues(result, validation_errors)
+        
         # Process decision based on confidence
-        confidence = float(result.get("confidence", 0.5))
+        agent_confidence = float(result.get("confidence", 0.5))
+        
+        # Calculate confidence based on tool results
+        confidence = self._calculate_confidence_from_results(tool_results, agent_confidence)
+        
+        # Apply confidence penalty for missing tools
+        if not validation_result["valid"]:
+            confidence_penalty = validation_result.get("confidence_penalty", 0.0)
+            if confidence_penalty > 0:
+                confidence = max(0.0, confidence - confidence_penalty)
+                print(f"   └─ Confidence penalty applied: -{confidence_penalty:.2%} for missing tools")
+        
+        # Update result with calculated confidence
+        result["confidence"] = confidence
+        if confidence != agent_confidence:
+            print(f"   └─ Confidence adjusted: {agent_confidence:.2%} → {confidence:.2%} (based on tool results)")
         decision = result.get("decision", "NEEDS_REVIEW")
         contradictions = result.get("contradictions", [])
         fraud_risk = float(result.get("fraud_risk", 0.5))
+        
+        # Enforce decision rules in code (override agent decision if incorrect)
+        original_decision = decision
+        decision = self._enforce_decision_rules(confidence, fraud_risk, contradictions, decision)
+        
+        if decision != original_decision:
+            print(f"   └─ ⚠️  Decision overridden: {original_decision} → {decision} (enforced by code)")
+        
+        print(f"\n   └─ 📊 Decision Analysis:")
+        print(f"      └─ Decision: {decision} {'(overridden)' if decision != original_decision else ''}")
+        print(f"      └─ Confidence: {confidence:.2%}")
+        print(f"      └─ Fraud Risk: {fraud_risk:.2f}")
+        print(f"      └─ Contradictions: {len(contradictions)}")
         
         # Determine if auto-settlement occurred
         auto_settled = False
@@ -251,13 +487,19 @@ Remember: You MUST call the verification tools - they handle payments automatica
             if approve_result.get("success"):
                 auto_settled = True
                 tx_hash = approve_result.get("tx_hash")
+                print(f"      └─ ✅ Auto-settlement: Yes (TX: {tx_hash})")
+            else:
+                print(f"      └─ ❌ Auto-settlement: Failed")
+        else:
+            print(f"      └─ Auto-settlement: Not attempted")
         
         # Determine human review requirement
         human_review_required = decision in [
             "APPROVED_WITH_REVIEW",
             "NEEDS_REVIEW",
             "NEEDS_MORE_DATA",
-            "INSUFFICIENT_DATA"
+            "INSUFFICIENT_DATA",
+            "FRAUD_DETECTED"
         ]
         
         # Build review reasons
@@ -287,16 +529,317 @@ Remember: You MUST call the verification tools - they handle payments automatica
             "fraud_risk": fraud_risk
         }
     
+    def _parse_json_response(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """Parse JSON from agent response with improved robustness."""
+        import json
+        import re
+        
+        # Try JSON code blocks first
+        patterns = [
+            r'```json\s*(\{.*?\})\s*```',  # JSON code blocks
+            r'```\s*(\{.*?\})\s*```',  # Code blocks without json tag
+            r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}',  # Nested JSON
+            r'\{.*\}',  # Simple JSON
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, response_text, re.DOTALL)
+            if match:
+                json_str = match.group(1) if match.lastindex else match.group(0)
+                try:
+                    result = json.loads(json_str)
+                    if isinstance(result, dict) and "decision" in result:
+                        print(f"   └─ ✓ Successfully parsed JSON response")
+                        return result
+                except json.JSONDecodeError:
+                    continue
+        
+        # If all patterns fail, try to fix common issues
+        return self._fix_and_parse_json(response_text)
+    
+    def _fix_and_parse_json(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """Attempt to fix common JSON issues and parse."""
+        import json
+        import re
+        
+        # Try to find JSON-like content
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if not json_match:
+            return None
+        
+        json_str = json_match.group(0)
+        
+        # Try to fix common issues
+        # Remove trailing commas before closing braces/brackets
+        json_str = re.sub(r',\s*}', '}', json_str)
+        json_str = re.sub(r',\s*]', ']', json_str)
+        
+        # Try to fix unescaped quotes in strings
+        # This is a simple fix - more complex cases might need manual handling
+        try:
+            result = json.loads(json_str)
+            if isinstance(result, dict) and "decision" in result:
+                print(f"   └─ ✓ Successfully parsed JSON after fixing common issues")
+                return result
+        except json.JSONDecodeError:
+            pass
+        
+        return None
+    
+    def _extract_amount_from_document_result(
+        self,
+        document_result: Dict[str, Any]
+    ) -> Optional[float]:
+        """Extract total amount from document extraction result."""
+        if not document_result:
+            return None
+        
+        extracted_data = document_result.get("extracted_data", {})
+        extracted_fields = extracted_data.get("extracted_fields", {})
+        
+        # Try different field names
+        amount_fields = [
+            "total_amount", "grand_total", "final_total",
+            "total_liability", "digit_liability"
+        ]
+        
+        for field in amount_fields:
+            if field in extracted_fields:
+                amount = extracted_fields[field]
+                if isinstance(amount, (int, float)):
+                    return float(amount)
+                elif isinstance(amount, str):
+                    # Remove currency symbols and parse
+                    import re
+                    cleaned = re.sub(r'[₹$,\s]', '', str(amount))
+                    try:
+                        return float(cleaned)
+                    except ValueError:
+                        continue
+        
+        # Try calculating from components
+        digit_liability = extracted_fields.get("digit_liability")
+        customer_liability = extracted_fields.get("customer_liability")
+        
+        if digit_liability and customer_liability:
+            try:
+                return float(digit_liability) + float(customer_liability)
+            except (ValueError, TypeError):
+                pass
+        
+        return None
+    
+    def _calculate_confidence_from_results(
+        self,
+        tool_results: Dict[str, Any],
+        agent_confidence: float
+    ) -> float:
+        """Calculate confidence based on tool results."""
+        confidence = agent_confidence
+        
+        # Boost confidence if all tools called successfully
+        required_tools = ["extract_document_data", "cross_check_amounts", "validate_claim_data", "verify_fraud"]
+        called_tools = [tool for tool in required_tools if tool in tool_results]
+        tool_completion_rate = len(called_tools) / len(required_tools)
+        
+        if tool_completion_rate == 1.0:
+            confidence = min(1.0, confidence + 0.1)  # Boost by 10%
+        elif tool_completion_rate < 0.5:
+            confidence = max(0.0, confidence - 0.2)  # Reduce by 20%
+        
+        # Boost confidence if amounts match
+        cross_check = tool_results.get("cross_check_amounts", {})
+        if cross_check.get("matches"):
+            confidence = min(1.0, confidence + 0.15)  # Boost by 15%
+        
+        # Reduce confidence if contradictions exist
+        contradictions = tool_results.get("reasoning", {}).get("contradictions", [])
+        if contradictions:
+            confidence = max(0.0, confidence - (len(contradictions) * 0.1))  # Reduce by 10% per contradiction
+        
+        return max(0.0, min(1.0, confidence))
+    
+    def _validate_tool_calls(
+        self,
+        tool_results: Dict[str, Any],
+        evidence: List[Dict[str, Any]],
+        claim_id: str
+    ) -> Dict[str, Any]:
+        """
+        Validate that required tools were called.
+        
+        Returns:
+            {
+                "valid": bool,
+                "warnings": List[str],
+                "missing_tools": List[str]
+            }
+        """
+        warnings = []
+        missing_tools = []
+        
+        # Check if verify_fraud was called (always required)
+        if "verify_fraud" not in tool_results:
+            missing_tools.append("verify_fraud")
+            warnings.append("verify_fraud was not called (required for all claims)")
+        
+        # Check if verify_document was called when documents are available
+        documents = [e for e in evidence if e.get("file_type") == "document"]
+        if documents and "verify_document" not in tool_results:
+            missing_tools.append("verify_document")
+            warnings.append(f"verify_document was not called but {len(documents)} document(s) available")
+        
+        # Check if verify_image was called when images are available
+        images = [e for e in evidence if e.get("file_type") == "image"]
+        if images and "verify_image" not in tool_results:
+            missing_tools.append("verify_image")
+            warnings.append(f"verify_image was not called but {len(images)} image(s) available")
+        
+        # Validate tool result structure
+        for tool_name, result in tool_results.items():
+            if not isinstance(result, dict):
+                warnings.append(f"{tool_name} result is not a dict: {type(result)}")
+            elif "success" in result and not result.get("success"):
+                warnings.append(f"{tool_name} call failed: {result.get('error', 'unknown error')}")
+        
+        # Calculate confidence penalty for missing tools
+        confidence_penalty = 0.0
+        if missing_tools:
+            # Reduce confidence by 20% for missing critical tools
+            confidence_penalty = 0.2
+        
+        return {
+            "valid": len(missing_tools) == 0,
+            "warnings": warnings,
+            "missing_tools": missing_tools,
+            "confidence_penalty": confidence_penalty
+        }
+    
+    def _fix_schema_issues(self, result: Dict[str, Any], errors: List[str]) -> Dict[str, Any]:
+        """Fix common schema validation issues."""
+        # Ensure required fields exist
+        if "decision" not in result:
+            result["decision"] = "NEEDS_REVIEW"
+        if "confidence" not in result:
+            result["confidence"] = 0.5
+        if "reasoning" not in result:
+            result["reasoning"] = ""
+        if "tool_results" not in result:
+            result["tool_results"] = {}
+        if "requested_data" not in result:
+            result["requested_data"] = []
+        if "human_review_required" not in result:
+            result["human_review_required"] = True
+        if "review_reasons" not in result:
+            result["review_reasons"] = []
+        if "contradictions" not in result:
+            result["contradictions"] = []
+        if "fraud_risk" not in result:
+            result["fraud_risk"] = 0.5
+        
+        # Ensure types are correct
+        result["confidence"] = float(result.get("confidence", 0.5))
+        result["fraud_risk"] = float(result.get("fraud_risk", 0.5))
+        result["confidence"] = max(0.0, min(1.0, result["confidence"]))
+        result["fraud_risk"] = max(0.0, min(1.0, result["fraud_risk"]))
+        
+        return result
+    
+    def _enforce_decision_rules(
+        self,
+        confidence: float,
+        fraud_risk: float,
+        contradictions: List[str],
+        agent_decision: str
+    ) -> str:
+        """
+        Enforce decision rules in code based on thresholds.
+        Overrides agent decision if it doesn't match thresholds.
+        
+        Returns:
+            Corrected decision based on thresholds
+        """
+        # Rule 1: FRAUD_DETECTED if fraud_risk >= 0.7 (highest priority)
+        if fraud_risk >= self.FRAUD_RISK_THRESHOLD:
+            return "FRAUD_DETECTED"
+        
+        # Validate AUTO_APPROVED conditions - prevent if conditions not met
+        auto_approve_conditions_met = (
+            confidence >= self.AUTO_APPROVE_THRESHOLD and 
+            len(contradictions) == 0 and 
+            fraud_risk < self.FRAUD_RISK_AUTO_APPROVE_MAX
+        )
+        
+        # If agent says AUTO_APPROVED but conditions aren't met, override it
+        if agent_decision == "AUTO_APPROVED" and not auto_approve_conditions_met:
+            # Determine appropriate override based on what condition failed
+            if fraud_risk >= self.FRAUD_RISK_AUTO_APPROVE_MAX:
+                # High fraud risk - needs review
+                if confidence >= self.MEDIUM_CONFIDENCE_THRESHOLD:
+                    return "NEEDS_REVIEW"
+                else:
+                    return "INSUFFICIENT_DATA"
+            elif len(contradictions) > 0:
+                # Contradictions exist - needs review
+                if confidence >= self.MEDIUM_CONFIDENCE_THRESHOLD:
+                    return "NEEDS_REVIEW"
+                else:
+                    return "INSUFFICIENT_DATA"
+            elif confidence < self.AUTO_APPROVE_THRESHOLD:
+                # Low confidence - determine appropriate decision
+                if confidence >= self.HIGH_CONFIDENCE_THRESHOLD:
+                    return "APPROVED_WITH_REVIEW"
+                elif confidence >= self.MEDIUM_CONFIDENCE_THRESHOLD:
+                    return "NEEDS_REVIEW"
+                elif confidence >= self.LOW_CONFIDENCE_THRESHOLD:
+                    return "NEEDS_MORE_DATA"
+                else:
+                    return "INSUFFICIENT_DATA"
+        
+        # Rule 2: AUTO_APPROVED if confidence >= 0.95 AND no contradictions AND fraud_risk < 0.3
+        if auto_approve_conditions_met:
+            return "AUTO_APPROVED"
+        
+        # Rule 3: APPROVED_WITH_REVIEW if confidence >= 0.85 AND no contradictions
+        if confidence >= self.HIGH_CONFIDENCE_THRESHOLD and len(contradictions) == 0:
+            # Only override if agent decision is lower priority
+            if agent_decision not in ["AUTO_APPROVED", "APPROVED_WITH_REVIEW"]:
+                return "APPROVED_WITH_REVIEW"
+            return agent_decision
+        
+        # Rule 4: NEEDS_REVIEW if confidence >= 0.70
+        if confidence >= self.MEDIUM_CONFIDENCE_THRESHOLD:
+            # Only override if agent decision is lower priority
+            if agent_decision not in ["AUTO_APPROVED", "APPROVED_WITH_REVIEW", "NEEDS_REVIEW"]:
+                return "NEEDS_REVIEW"
+            return agent_decision
+        
+        # Rule 5: NEEDS_MORE_DATA if confidence >= 0.50
+        if confidence >= self.LOW_CONFIDENCE_THRESHOLD:
+            # Only override if agent decision is lower priority
+            if agent_decision not in ["AUTO_APPROVED", "APPROVED_WITH_REVIEW", "NEEDS_REVIEW", "NEEDS_MORE_DATA"]:
+                return "NEEDS_MORE_DATA"
+            return agent_decision
+        
+        # Rule 6: INSUFFICIENT_DATA if confidence < 0.50
+        return "INSUFFICIENT_DATA"
+    
     def _build_evidence_context(self, evidence: List[Dict[str, Any]]) -> str:
-        """Build evidence context string."""
+        """Build evidence context string with clear file paths for tool calls."""
         if not evidence:
             return "No evidence provided"
         
         context_parts = []
+        context_parts.append("Evidence Files Available:")
         for i, ev in enumerate(evidence, 1):
             file_type = ev.get("file_type", "unknown")
             file_path = ev.get("file_path", "unknown")
-            context_parts.append(f"{i}. {file_type.upper()}: {file_path}")
+            context_parts.append(f"  {i}. Type: {file_type.upper()}")
+            context_parts.append(f"     File Path: {file_path}")
+            context_parts.append(f"     Action Required: Call verify_{file_type}(claim_id, '{file_path}')")
+            context_parts.append("")
+        
+        context_parts.append("IMPORTANT: Use the exact file_path values above when calling verification tools.")
         
         return "\n".join(context_parts)
     
@@ -311,17 +854,8 @@ Remember: You MUST call the verification tools - they handle payments automatica
         confidence_match = re.search(r'confidence[:\s]+([0-9.]+)', text, re.IGNORECASE)
         confidence = float(confidence_match.group(1)) if confidence_match else 0.5
         
-        # Determine decision based on confidence
-        if confidence >= self.AUTO_APPROVE_THRESHOLD:
-            decision = "AUTO_APPROVED"
-        elif confidence >= self.HIGH_CONFIDENCE_THRESHOLD:
-            decision = "APPROVED_WITH_REVIEW"
-        elif confidence >= self.MEDIUM_CONFIDENCE_THRESHOLD:
-            decision = "NEEDS_REVIEW"
-        elif confidence >= self.LOW_CONFIDENCE_THRESHOLD:
-            decision = "NEEDS_MORE_DATA"
-        else:
-            decision = "INSUFFICIENT_DATA"
+        # Determine decision based on confidence (using enforcement rules)
+        decision = self._enforce_decision_rules(confidence, 0.5, [], "NEEDS_REVIEW")
         
         return {
             "decision": decision,
