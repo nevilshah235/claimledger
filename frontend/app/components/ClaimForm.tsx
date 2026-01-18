@@ -42,11 +42,13 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
     setLoading(true);
 
     try {
+      // Show files as being uploaded (they're already visible in the UI)
       const result = await api.claims.create({
         claim_amount: parseFloat(amount),
         files: files.length > 0 ? files : undefined,
       });
 
+      // Only reset form on success
       onClaimCreated(result.claim_id);
       
       // Reset form
@@ -54,7 +56,8 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
       setDescription('');
       setFiles([]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to submit claim');
+      // Don't clear files on error - user can see what they tried to upload
+      setError(err instanceof Error ? err.message : 'Failed to submit claim. Files may not have been uploaded.');
     } finally {
       setLoading(false);
     }

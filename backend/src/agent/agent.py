@@ -83,16 +83,15 @@ class ClaimEvaluationAgent:
         self.client = None
         if self.api_key:
             try:
-                import google.generativeai as genai
-                genai.configure(api_key=self.api_key)
-                self.client = genai.GenerativeModel(
-                    model_name=self.model,
-                    system_instruction=SYSTEM_INSTRUCTION
-                )
+                import google.genai as genai
+                self.client = genai.Client(api_key=self.api_key)
+                self.model_name = self.model
+                # Note: system_instruction would be passed in generate_content config
             except ImportError:
-                print("google-generativeai not installed, using mock mode")
+                print("google-genai not installed, using mock mode")
             except Exception as e:
                 print(f"Failed to initialize Gemini: {e}")
+                self.client = None
     
     async def evaluate(
         self,

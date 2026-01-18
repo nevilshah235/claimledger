@@ -13,7 +13,8 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
     "python-dotenv>=1.0.0",
     "httpx>=0.25.0",
-    "google-genai>=0.2.0",  # Google Agents Framework
+    "google-genai>=1.0.0",  # Google GenAI SDK (unified SDK)
+    "google-adk>=1.0.0",  # Google Agent Development Kit for orchestration
     "python-multipart>=0.0.6",  # File uploads
     "python-jose[cryptography]>=3.3.0",  # JWT tokens
     "passlib[bcrypt]>=1.7.4",  # Password hashing
@@ -27,6 +28,9 @@ dependencies = [
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-cov>=4.1.0",
     "black>=23.11.0",
     "ruff>=0.1.6",
 ]
@@ -43,6 +47,9 @@ managed = true
 dev-dependencies = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-cov>=4.1.0",
     "black>=23.11.0",
     "ruff>=0.1.6",
 ]
@@ -62,3 +69,9 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 addopts = "-v --tb=short"
+markers = [
+    "unit: Unit tests with mocked Gemini API",
+    "integration: Integration tests with mocked Gemini API",
+    "real_api: Tests that require real Gemini API (skip if no key)",
+    "slow: Tests that take longer (real API calls)",
+]
