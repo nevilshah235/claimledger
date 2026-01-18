@@ -1,0 +1,11 @@
+# Planning documents (temporary)
+CHANGE_CATEGORIZATION.md
+COMMIT_ANALYSIS.md
+COMMIT_PLAN.md
+COMMIT_QUICK_REFERENCE.md
+
+# Test uploads directory
+backend/uploads/
+
+# Lock files (generated)
+backend/uv.lock
