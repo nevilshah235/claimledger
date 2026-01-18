@@ -33,7 +33,7 @@ class Claim(Base):
     decision = Column(
         String(20),
         nullable=True,
-    )  # AUTO_APPROVED, APPROVED_WITH_REVIEW, NEEDS_REVIEW, NEEDS_MORE_DATA, INSUFFICIENT_DATA, REJECTED
+    )  # AUTO_APPROVED, APPROVED_WITH_REVIEW, NEEDS_REVIEW, NEEDS_MORE_DATA, INSUFFICIENT_DATA, FRAUD_DETECTED, REJECTED
     confidence = Column(Float, nullable=True)  # 0.0-1.0
     approved_amount = Column(Numeric(18, 2), nullable=True)  # USDC amount
     processing_costs = Column(Numeric(18, 2), nullable=False, default=Decimal("0.00"))  # Sum of x402 payments
@@ -52,6 +52,7 @@ class Claim(Base):
     evaluations = relationship("Evaluation", back_populates="claim", cascade="all, delete-orphan")
     x402_receipts = relationship("X402Receipt", back_populates="claim", cascade="all, delete-orphan")
     agent_results = relationship("AgentResult", back_populates="claim", cascade="all, delete-orphan")
+    agent_logs = relationship("AgentLog", back_populates="claim", cascade="all, delete-orphan")
 
 
 class Evidence(Base):
@@ -152,3 +153,20 @@ class AgentResult(Base):
     
     # Relationships
     claim = relationship("Claim", back_populates="agent_results")
+
+
+class AgentLog(Base):
+    """Store real-time activity logs from agents during evaluation."""
+    
+    __tablename__ = "agent_logs"
+    
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    claim_id = Column(String(36), ForeignKey("claims.id"), nullable=False)
+    agent_type = Column(String(50), nullable=False)  # document, image, fraud, reasoning, orchestrator
+    message = Column(Text, nullable=False)  # What the agent is doing/reasoning
+    log_level = Column(String(20), nullable=False, default="INFO")  # INFO, DEBUG, WARNING, ERROR
+    log_metadata = Column(JSON, nullable=True)  # Additional context (tool calls, file paths, etc.) - renamed from 'metadata' to avoid SQLAlchemy conflict
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    # Relationships
+    claim = relationship("Claim", back_populates="agent_logs")
