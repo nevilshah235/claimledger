@@ -19,61 +19,56 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.keys
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
 .venv/
 venv/
 ENV/
 env/
 
-# Rye
-.python-version
-.rye/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
 # IDEs
 .vscode/
 .idea/
-.cursor/
 *.swp
 *.swo
 *~
 
-# Environment
+# Environment files
 .env
 .env.local
 .env.*.local
-
-# Node
-node_modules/
-.next/
-out/
-dist/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Vercel
-.vercel/
-
-# Solidity
-cache/
-out/
-broadcast/
 
 # Database
 *.db
 *.sqlite
 
+# Logs
+*.log
+
 # OS
 .DS_Store
 Thumbs.db
 
+# Testing
+tests/
+test_*.py
+
+# Documentation
+*.md
+!README.md
+
+# Scripts (don't need in Docker image)
+scripts/
+
 # Temporary files
 *.tmp
 *.temp
+
+# Uploads directory (will be created at runtime)
+uploads/*
