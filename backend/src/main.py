@@ -7,7 +7,6 @@ ClaimLedger API - Agentic insurance claims with:
 - USDC settlement on Arc blockchain
 """
 
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -50,32 +49,16 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS configuration - support both local dev and production Vercel URLs
-cors_origins = [
-    "http://localhost:3000",  # Next.js dev server
-    "http://localhost:3001",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:3001",
-    "http://localhost:3000/",  # With trailing slash
-]
-
-# Add Vercel deployment URLs from environment if provided
-vercel_url = os.getenv("VERCEL_URL")
-vercel_preview_url = os.getenv("VERCEL_PREVIEW_URL")
-if vercel_url:
-    cors_origins.append(f"https://{vercel_url}")
-if vercel_preview_url:
-    cors_origins.append(f"https://{vercel_preview_url}")
-
-# Allow custom frontend URL from environment
-custom_frontend_url = os.getenv("FRONTEND_URL")
-if custom_frontend_url:
-    cors_origins.append(custom_frontend_url)
-
 # CORS middleware for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=[
+        "http://localhost:3000",  # Next.js dev server
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://localhost:3000/",  # With trailing slash
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
