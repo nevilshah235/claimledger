@@ -21,9 +21,9 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import X402Receipt, Claim, Evidence
 from ..services.gateway import get_gateway_service
-from ..agent.agents.document_agent import DocumentAgent
-from ..agent.agents.image_agent import ImageAgent
-from ..agent.agents.fraud_agent import FraudAgent
+from ..agent.adk_agents.document_agent import ADKDocumentAgent
+from ..agent.adk_agents.image_agent import ADKImageAgent
+from ..agent.adk_agents.fraud_agent import ADKFraudAgent
 
 router = APIRouter(prefix="/verifier", tags=["verifier"])
 
@@ -192,8 +192,8 @@ async def verify_document(
             "document"
         )
     
-    # Use DocumentAgent for real Gemini API analysis
-    document_agent = DocumentAgent()
+    # Use ADKDocumentAgent for real Gemini API analysis
+    document_agent = ADKDocumentAgent()
     result = await document_agent.analyze(
         request.claim_id,
         [{"file_path": request.document_path}]
@@ -241,8 +241,8 @@ async def analyze_image(
             "image"
         )
     
-    # Use ImageAgent for real Gemini API analysis
-    image_agent = ImageAgent()
+    # Use ADKImageAgent for real Gemini API analysis
+    image_agent = ADKImageAgent()
     result = await image_agent.analyze(
         request.claim_id,
         [{"file_path": request.image_path}]
@@ -302,7 +302,7 @@ async def check_fraud(
         for e in evidence
     ]
     
-    fraud_agent = FraudAgent()
+    fraud_agent = ADKFraudAgent()
     result = await fraud_agent.analyze(
         request.claim_id,
         claim.claim_amount,
