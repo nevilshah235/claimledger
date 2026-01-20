@@ -42,6 +42,10 @@ RUN pip install --no-cache-dir uv && \
 # Copy application code
 COPY src/ ./src/
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Create uploads directory
 RUN mkdir -p uploads
 
@@ -52,10 +56,9 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Expose port (Cloud Run sets PORT env var, default to 8080)
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8080}/health')"
+# Health check (use fixed port 8080 or read from env)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import os, urllib.request; port = os.getenv('PORT', '8080'); urllib.request.urlopen(f'http://localhost:{port}/health')"
 
-# Run the application
-# Cloud Run provides PORT environment variable
-CMD uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8080}
+# Use entrypoint script to handle PORT variable correctly
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
