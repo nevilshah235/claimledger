@@ -101,14 +101,19 @@ cloud_run_start() {
     
     # Scale to minimum 1 instance (ensures service is available)
     log_info "Scaling service to minimum 1 instance..."
-    gcloud run services update "${SERVICE_NAME}" \
+    if ! gcloud run services update "${SERVICE_NAME}" \
         --platform managed \
         --region "${REGION}" \
         --min-instances 1 \
-        --max-instances 1 > /dev/null 2>&1 || {
+        --max-instances 1 2>&1; then
         log_error "Failed to start Cloud Run service"
+        log_info "Trying to get more details..."
+        gcloud run services describe "${SERVICE_NAME}" \
+            --platform managed \
+            --region "${REGION}" \
+            --format="value(status.conditions[0].message)" 2>&1 || true
         exit 1
-    }
+    fi
     
     log_success "Cloud Run service started"
     cloud_run_status

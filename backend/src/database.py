@@ -15,8 +15,9 @@ load_dotenv()
 # For production, set DATABASE_URL to PostgreSQL connection string
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./claimledger.db")
 
-# Connection timeout for cloud databases (seconds). Keep small so Cloud Run fails fast.
-DB_CONNECT_TIMEOUT_SECONDS = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "5"))
+# Connection timeout for cloud databases (seconds).
+# For Cloud SQL, the socket may take a few seconds to be ready.
+DB_CONNECT_TIMEOUT_SECONDS = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "10"))
 
 # Create engine
 _connect_args = {}
@@ -64,10 +65,32 @@ def init_db():
 
 def check_db_accessible() -> None:
     """
-    Fail-fast connectivity check.
+    Fail-fast connectivity check with retry logic.
 
     - Opens a DB connection and runs `SELECT 1`.
+    - Retries with exponential backoff for Cloud SQL (socket may not be ready immediately).
     - Raises on failure so the app/container can fail fast in Cloud Run.
     """
-    with engine.connect() as conn:
-        conn.execute(text("SELECT 1"))
+    import time
+    
+    max_retries = 10
+    retry_delay = 1  # Start with 1 second
+    
+    for attempt in range(max_retries):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return  # Success!
+        except Exception as e:
+            if attempt == max_retries - 1:
+                # Last attempt failed, raise the error
+                raise
+            # Check if it's a connection error (socket not ready)
+            error_str = str(e).lower()
+            if "connection refused" in error_str or "socket" in error_str:
+                print(f"⏳ Waiting for database socket (attempt {attempt + 1}/{max_retries})...")
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.5, 5)  # Exponential backoff, max 5s
+            else:
+                # Different error, don't retry
+                raise
