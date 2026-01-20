@@ -7,12 +7,13 @@ ClaimLedger API - Agentic insurance claims with:
 - USDC settlement on Arc blockchain
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .database import init_db
+from .database import check_db_accessible, init_db
 
 # Import API routers
 from .api.claims import router as claims_router
@@ -25,10 +26,30 @@ from .api.auth import router as auth_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown events."""
-    # Startup: Create database tables
     print("🚀 Starting ClaimLedger API...")
-    init_db()
-    print("✅ Database tables created/verified")
+
+    # Fail-fast: verify Cloud SQL / DB is reachable.
+    # If this fails, the container should crash so Cloud Run reports a clear startup failure.
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, check_db_accessible)
+        print("✅ Database is reachable")
+    except Exception as e:
+        print(f"❌ Database is NOT reachable: {type(e).__name__}: {e}")
+        raise
+
+    # Initialize DB schema after connectivity is confirmed.
+    async def init_db_async():
+        try:
+            # Run in thread pool to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, init_db)
+        except Exception as e:
+            print(f"❌ Database schema initialization failed: {type(e).__name__}: {e}")
+            raise
+    
+    await init_db_async()
+    
     yield
     # Shutdown
     print("👋 Shutting down ClaimLedger API...")
