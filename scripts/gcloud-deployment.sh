@@ -101,19 +101,14 @@ cloud_run_start() {
     
     # Scale to minimum 1 instance (ensures service is available)
     log_info "Scaling service to minimum 1 instance..."
-    if ! gcloud run services update "${SERVICE_NAME}" \
+    gcloud run services update "${SERVICE_NAME}" \
         --platform managed \
         --region "${REGION}" \
         --min-instances 1 \
-        --max-instances 1 2>&1; then
+        --max-instances 1 > /dev/null 2>&1 || {
         log_error "Failed to start Cloud Run service"
-        log_info "Trying to get more details..."
-        gcloud run services describe "${SERVICE_NAME}" \
-            --platform managed \
-            --region "${REGION}" \
-            --format="value(status.conditions[0].message)" 2>&1 || true
         exit 1
-    fi
+    }
     
     log_success "Cloud Run service started"
     cloud_run_status
@@ -264,30 +259,6 @@ status_all() {
     echo ""
 }
 
-# Logs functions
-cloud_run_logs() {
-    local limit="${1:-50}"
-    log_info "Fetching Cloud Run logs (last ${limit} lines)..."
-    echo ""
-    gcloud run services logs read "${SERVICE_NAME}" \
-        --platform managed \
-        --region "${REGION}" \
-        --limit "${limit}" || {
-        log_error "Failed to fetch logs"
-        exit 1
-    }
-}
-
-cloud_sql_logs() {
-    log_info "Fetching Cloud SQL logs..."
-    echo ""
-    gcloud sql operations list \
-        --instance="${DB_INSTANCE}" \
-        --limit=10 || {
-        log_warning "Could not fetch Cloud SQL operations"
-    }
-}
-
 # Show usage
 usage() {
     cat << EOF
@@ -299,7 +270,6 @@ COMMANDS:
     start [service]    Start service(s)
     stop [service]     Stop service(s)
     status [service]   Check status of service(s)
-    logs [service]     View logs for service(s)
     help               Show this help message
 
 SERVICES:
@@ -382,21 +352,6 @@ main() {
                     ;;
                 cloudsql)
                     cloud_sql_status || true
-                    ;;
-                *)
-                    log_error "Unknown service: ${service}"
-                    usage
-                    exit 1
-                    ;;
-            esac
-            ;;
-        logs)
-            case "${service}" in
-                all|cloudrun)
-                    cloud_run_logs
-                    ;;
-                cloudsql)
-                    cloud_sql_logs
                     ;;
                 *)
                     log_error "Unknown service: ${service}"

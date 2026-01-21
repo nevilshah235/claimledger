@@ -49,6 +49,10 @@ htmlcov/
 .env.*.local
 .env.production
 .env.staging
+.env.production.yaml
+.env.production.yml
+.env.*.production.yaml
+.env.*.production.yml
 
 # Node
 node_modules/

@@ -12,8 +12,9 @@ Uses Circle Gateway for x402 micropayments.
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
-from fastapi import APIRouter, HTTPException, Header, Depends, Request
+from typing import Optional, Any, Dict
+
+from fastapi import APIRouter, HTTPException, Header, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -21,9 +22,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import X402Receipt, Claim, Evidence
 from ..services.gateway import get_gateway_service
-from ..agent.adk_agents.document_agent import ADKDocumentAgent
-from ..agent.adk_agents.image_agent import ADKImageAgent
-from ..agent.adk_agents.fraud_agent import ADKFraudAgent
+from ..agent.adk_agents import ADKDocumentAgent, ADKImageAgent, ADKFraudAgent
 
 router = APIRouter(prefix="/verifier", tags=["verifier"])
 
@@ -79,6 +78,48 @@ class FraudCheckResponse(BaseModel):
     fraud_score: float
     risk_level: str  # LOW, MEDIUM, HIGH
     check_id: str
+
+
+def _persist_verifier_result_metadata(
+    *,
+    db: Session,
+    claim_id: str,
+    agent_type: str,
+    full_result: Dict[str, Any],
+    evidence_file_path: Optional[str] = None,
+) -> None:
+    """
+    Persist full verifier outputs for file-centric UX/debugging.
+
+    Centralization decision:
+    - `AgentResult` rows are stored centrally by `backend/src/api/agent.py`
+      when it persists orchestrator/tool results.
+    - `/verifier/*` stores only evidence-level metadata (document/image),
+      plus `X402Receipt` via `verify_payment_receipt(...)`.
+
+    Evidence-level storage:
+    - Store under Evidence.analysis_metadata["verifier_result"] to keep it
+      separate from STEP 1 extraction artifacts.
+    """
+    # Evidence-level persistence (document/image only)
+    if evidence_file_path:
+        evidence = (
+            db.query(Evidence)
+            .filter(Evidence.claim_id == claim_id, Evidence.file_path == evidence_file_path)
+            .first()
+        )
+        if evidence:
+            existing = evidence.analysis_metadata or {}
+            # Keep multi-step artifacts separate: extraction_result vs verifier_result
+            existing["verifier_result"] = {
+                "type": agent_type,
+                "result": full_result or {},
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            evidence.analysis_metadata = existing
+            db.add(evidence)
+
+    db.commit()
 
 
 async def verify_payment_receipt(
@@ -192,7 +233,7 @@ async def verify_document(
             "document"
         )
     
-    # Use ADKDocumentAgent for real Gemini API analysis
+    # Use DocumentAgent for real Gemini API analysis
     document_agent = ADKDocumentAgent()
     result = await document_agent.analyze(
         request.claim_id,
@@ -203,6 +244,14 @@ async def verify_document(
     if not result:
         result = {}
     verification_id = result.get("verification_id") or str(uuid.uuid4())
+
+    _persist_verifier_result_metadata(
+        db=db,
+        claim_id=request.claim_id,
+        agent_type="document",
+        full_result=result,
+        evidence_file_path=request.document_path,
+    )
     
     return DocumentVerificationResponse(
         extracted_data=result.get("extracted_data", {}),
@@ -241,7 +290,7 @@ async def analyze_image(
             "image"
         )
     
-    # Use ADKImageAgent for real Gemini API analysis
+    # Use ImageAgent for real Gemini API analysis
     image_agent = ADKImageAgent()
     result = await image_agent.analyze(
         request.claim_id,
@@ -252,6 +301,14 @@ async def analyze_image(
     if not result:
         result = {}
     analysis_id = result.get("analysis_id") or str(uuid.uuid4())
+
+    _persist_verifier_result_metadata(
+        db=db,
+        claim_id=request.claim_id,
+        agent_type="image",
+        full_result=result,
+        evidence_file_path=request.image_path,
+    )
     
     return ImageAnalysisResponse(
         damage_assessment=result.get("damage_assessment", {}),
@@ -290,7 +347,7 @@ async def check_fraud(
             "fraud"
         )
     
-    # Use FraudAgent for real Gemini API analysis
+    # Use ADKFraudAgent for real Gemini API analysis
     # Get claim and evidence from database
     claim = db.query(Claim).filter(Claim.id == request.claim_id).first()
     if not claim:
@@ -309,6 +366,12 @@ async def check_fraud(
         claim.claimant_address,
         evidence_dicts
     )
+
+    if not result:
+        result = {}
+
+    # NOTE: Fraud has no single evidence file to attach metadata to.
+    # Claim-level persistence is centralized in `backend/src/api/agent.py`.
     
     check_id = result.get("check_id", str(uuid.uuid4()))
     
