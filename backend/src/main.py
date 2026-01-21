@@ -10,6 +10,7 @@ ClaimLedger API - Agentic insurance claims with:
 import asyncio
 from contextlib import asynccontextmanager
 
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -71,18 +72,36 @@ app = FastAPI(
 )
 
 # CORS middleware for frontend
+# Cloud Run/Vercel deployments often need environment-driven origins.
+# - FRONTEND_URL: single origin, e.g. "https://claimledger.vercel.app"
+# - CORS_ALLOW_ORIGINS: comma-separated origins, e.g. "https://a.vercel.app,https://b.vercel.app"
+frontend_url = (os.getenv("FRONTEND_URL") or "").strip()
+cors_allow_origins_env = (os.getenv("CORS_ALLOW_ORIGINS") or "").strip()
+cors_allow_origins_from_env = [
+    o.strip() for o in cors_allow_origins_env.split(",") if o.strip()
+]
+
+default_allow_origins = [
+    "https://claimledger.vercel.app",
+    "http://localhost:3000",  # Next.js dev server
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+]
+
+allow_origins = [
+    *default_allow_origins,
+    *([frontend_url] if frontend_url else []),
+    *cors_allow_origins_from_env,
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://claimledger.vercel.app",
-        "http://localhost:3000",  # Next.js dev server
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=allow_origins,
     # Allow Vercel previews and Cloud Run default domains.
     # Origin never includes a trailing slash, so regex matches exact host origins.
-    allow_origin_regex=r"^https://.*\.(vercel\.app|a\.run\.app)$",
+    # Cloud Run may use either *.run.app or *.a.run.app depending on configuration.
+    allow_origin_regex=r"^https://.*\.(vercel\.app|run\.app|a\.run\.app)$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
