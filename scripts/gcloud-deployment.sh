@@ -6,10 +6,25 @@
 set -euo pipefail
 
 # Configuration - Update these if needed
-PROJECT_ID="claimly-484803"
-REGION="us-central1"
-SERVICE_NAME="claimledger-backend"
-DB_INSTANCE="claimledger-db"
+PROJECT_ID="${PROJECT_ID:-claimly-484803}"
+REGION="${REGION:-us-central1}"
+SERVICE_NAME="${SERVICE_NAME:-claimledger-backend}"
+DB_INSTANCE="${DB_INSTANCE:-claimledger-db}"
+
+# Deployment configuration
+BACKEND_DIR="${BACKEND_DIR:-backend}"
+REGISTRY="${REGISTRY:-gcr.io}"
+IMAGE_NAME="${IMAGE_NAME:-${SERVICE_NAME}}"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
+PLATFORM="${PLATFORM:-linux/amd64}"
+ENV_VARS_FILE="${ENV_VARS_FILE:-backend/.env.production.yaml}"
+
+# Cloud Run deploy defaults (override via env vars if needed)
+CLOUD_RUN_PORT="${CLOUD_RUN_PORT:-8080}"
+CLOUD_RUN_MEMORY="${CLOUD_RUN_MEMORY:-1Gi}"
+CLOUD_RUN_CPU="${CLOUD_RUN_CPU:-1}"
+CLOUD_RUN_TIMEOUT="${CLOUD_RUN_TIMEOUT:-300}"
+CLOUD_RUN_MAX_INSTANCES="${CLOUD_RUN_MAX_INSTANCES:-1}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -35,6 +50,25 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+run_cmd() {
+    # Usage: run_cmd <command...>
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        echo "[DRY-RUN] $*"
+        return 0
+    fi
+    "$@"
+}
+
+run_cmd_capture() {
+    # Usage: run_cmd_capture <command...>
+    # Prints command output to stdout, still respects DRY_RUN.
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        echo ""
+        return 0
+    fi
+    "$@"
+}
+
 # Check if gcloud is installed
 check_gcloud() {
     if ! command -v gcloud &> /dev/null; then
@@ -53,6 +87,47 @@ check_auth() {
     fi
 }
 
+check_docker() {
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        # In dry-run, avoid requiring a running daemon.
+        if ! command -v docker &> /dev/null; then
+            log_error "Docker is not installed. Please install Docker Desktop first."
+            exit 1
+        fi
+        return 0
+    fi
+    if ! command -v docker &> /dev/null; then
+        log_error "Docker is not installed. Please install Docker Desktop first."
+        exit 1
+    fi
+    if ! docker info > /dev/null 2>&1; then
+        log_error "Docker daemon is not running. Please start Docker Desktop."
+        exit 1
+    fi
+}
+
+validate_env_vars_file() {
+    if [ ! -f "${ENV_VARS_FILE}" ]; then
+        log_error "Env vars file not found: ${ENV_VARS_FILE}"
+        echo "  Expected a YAML file with entries like: KEY: \"value\""
+        exit 1
+    fi
+
+    # Minimal format sanity check for YAML: look for at least one non-comment line containing ':'
+    case "${ENV_VARS_FILE}" in
+        *.yml|*.yaml)
+            if ! grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:' "${ENV_VARS_FILE}" > /dev/null 2>&1; then
+                log_error "Env vars YAML doesn't look valid: ${ENV_VARS_FILE}"
+                echo "  Expected lines like: KEY: \"value\""
+                exit 1
+            fi
+            ;;
+        *)
+            log_warning "Env vars file is not .yml/.yaml; continuing anyway: ${ENV_VARS_FILE}"
+            ;;
+    esac
+}
+
 # Set the project
 set_project() {
     log_info "Setting project to ${PROJECT_ID}..."
@@ -60,6 +135,95 @@ set_project() {
         log_error "Failed to set project. Please check your permissions."
         exit 1
     }
+}
+
+# Image helpers
+local_image_ref() {
+    echo "${IMAGE_NAME}:${IMAGE_TAG}"
+}
+
+remote_image_ref() {
+    echo "${REGISTRY}/${PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}"
+}
+
+docker_build_image() {
+    log_info "Building Docker image (${PLATFORM}) from ${BACKEND_DIR}..."
+    if [ ! -d "${BACKEND_DIR}" ]; then
+        log_error "Backend directory not found: ${BACKEND_DIR}"
+        exit 1
+    fi
+    if [ ! -f "${BACKEND_DIR}/Dockerfile" ]; then
+        log_error "Dockerfile not found: ${BACKEND_DIR}/Dockerfile"
+        exit 1
+    fi
+
+    run_cmd docker build \
+        --platform "${PLATFORM}" \
+        -t "$(local_image_ref)" \
+        "${BACKEND_DIR}"
+    log_success "Built $(local_image_ref)"
+}
+
+docker_tag_image() {
+    log_info "Tagging image for registry..."
+    run_cmd docker tag "$(local_image_ref)" "$(remote_image_ref)"
+    log_success "Tagged $(remote_image_ref)"
+}
+
+docker_configure_registry_auth() {
+    log_info "Configuring Docker auth for ${REGISTRY}..."
+    # Prefer scoping to a single registry to avoid long credHelpers lists.
+    run_cmd gcloud auth configure-docker "${REGISTRY}"
+}
+
+docker_push_image() {
+    log_info "Pushing image to registry..."
+    run_cmd docker push "$(remote_image_ref)"
+    log_success "Pushed $(remote_image_ref)"
+}
+
+resolve_cloudsql_connection_name() {
+    if [ "${DRY_RUN:-0}" -eq 1 ]; then
+        # In dry-run, avoid calling gcloud at all.
+        echo "PROJECT:REGION:${DB_INSTANCE}"
+        return 0
+    fi
+    log_info "Resolving Cloud SQL connection name for ${DB_INSTANCE}..."
+    if ! gcloud sql instances describe "${DB_INSTANCE}" > /dev/null 2>&1; then
+        log_error "Cloud SQL instance not found: ${DB_INSTANCE}"
+        exit 1
+    fi
+
+    local connection_name
+    connection_name="$(run_cmd_capture gcloud sql instances describe "${DB_INSTANCE}" --format="value(connectionName)" | tr -d '\r')"
+    if [ -z "${connection_name}" ] && [ "${DRY_RUN:-0}" -ne 1 ]; then
+        log_error "Failed to resolve Cloud SQL connection name for ${DB_INSTANCE}"
+        exit 1
+    fi
+    echo "${connection_name}"
+}
+
+cloud_run_deploy() {
+    validate_env_vars_file
+
+    local connection_name
+    connection_name="$(resolve_cloudsql_connection_name)"
+
+    log_info "Deploying ${SERVICE_NAME} to Cloud Run (${REGION})..."
+    run_cmd gcloud run deploy "${SERVICE_NAME}" \
+        --image "$(remote_image_ref)" \
+        --platform managed \
+        --region "${REGION}" \
+        --allow-unauthenticated \
+        --port "${CLOUD_RUN_PORT}" \
+        --memory "${CLOUD_RUN_MEMORY}" \
+        --cpu "${CLOUD_RUN_CPU}" \
+        --timeout "${CLOUD_RUN_TIMEOUT}" \
+        --max-instances "${CLOUD_RUN_MAX_INSTANCES}" \
+        --add-cloudsql-instances "${connection_name}" \
+        --env-vars-file "${ENV_VARS_FILE}"
+
+    log_success "Deployed ${SERVICE_NAME}"
 }
 
 # Cloud Run Functions
@@ -259,10 +423,35 @@ status_all() {
     echo ""
 }
 
+build_only() {
+    check_docker
+    docker_build_image
+}
+
+push_only() {
+    check_docker
+    docker_tag_image
+    docker_configure_registry_auth
+    docker_push_image
+}
+
+deploy_only() {
+    cloud_run_deploy
+}
+
+deploy_all() {
+    check_docker
+    docker_build_image
+    docker_tag_image
+    docker_configure_registry_auth
+    docker_push_image
+    cloud_run_deploy
+}
+
 # Show usage
 usage() {
     cat << EOF
-Usage: $0 [COMMAND] [SERVICE]
+Usage: $0 [--dry-run] [COMMAND] [SERVICE]
 
 Manage Google Cloud Run and Cloud SQL deployments.
 
@@ -270,6 +459,10 @@ COMMANDS:
     start [service]    Start service(s)
     stop [service]     Stop service(s)
     status [service]   Check status of service(s)
+    build              Build backend Docker image (local)
+    push               Tag + authenticate + push image to registry
+    deploy-only        Deploy Cloud Run using already-pushed image
+    deploy             Build + push + deploy Cloud Run
     help               Show this help message
 
 SERVICES:
@@ -284,26 +477,50 @@ EXAMPLES:
     $0 start cloudrun     # Start only Cloud Run service
     $0 stop cloudsql      # Stop only Cloud SQL instance
     $0 status cloudrun    # Check Cloud Run status only
+    $0 deploy             # Build + push + deploy backend to Cloud Run
+    $0 --dry-run deploy   # Print commands without executing
 
 CONFIGURATION:
     Project ID: ${PROJECT_ID}
     Region: ${REGION}
     Service: ${SERVICE_NAME}
     DB Instance: ${DB_INSTANCE}
+    Backend Dir: ${BACKEND_DIR}
+    Registry: ${REGISTRY}
+    Image: $(remote_image_ref)
+    Platform: ${PLATFORM}
+    Env Vars File: ${ENV_VARS_FILE}
 
-    To change these, edit the script variables at the top.
+    To change these, edit the script variables at the top or override via env vars:
+      PROJECT_ID=... REGION=... SERVICE_NAME=... DB_INSTANCE=...
+      IMAGE_TAG=... ENV_VARS_FILE=... PLATFORM=...
 
 EOF
 }
 
 # Main script logic
 main() {
-    check_gcloud
-    check_auth
-    set_project
-    
+    DRY_RUN=0
+    if [ "${1:-}" = "--dry-run" ]; then
+        DRY_RUN=1
+        shift
+    fi
+
     local command="${1:-help}"
     local service="${2:-all}"
+
+    # Help should be usable without any cloud setup.
+    if [ "${command}" = "help" ] || [ "${command}" = "--help" ] || [ "${command}" = "-h" ]; then
+        usage
+        return 0
+    fi
+
+    check_gcloud
+    # In dry-run we avoid touching user gcloud config/credentials.
+    if [ "${DRY_RUN:-0}" -ne 1 ]; then
+        check_auth
+        set_project
+    fi
     
     case "${command}" in
         start)
@@ -360,8 +577,17 @@ main() {
                     ;;
             esac
             ;;
-        help|--help|-h)
-            usage
+        build)
+            build_only
+            ;;
+        push)
+            push_only
+            ;;
+        deploy-only)
+            deploy_only
+            ;;
+        deploy)
+            deploy_all
             ;;
         *)
             log_error "Unknown command: ${command}"
