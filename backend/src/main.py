@@ -74,12 +74,15 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://claimledger.vercel.app",
         "http://localhost:3000",  # Next.js dev server
         "http://localhost:3001",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
-        "http://localhost:3000/",  # With trailing slash
     ],
+    # Allow Vercel previews and Cloud Run default domains.
+    # Origin never includes a trailing slash, so regex matches exact host origins.
+    allow_origin_regex=r"^https://.*\.(vercel\.app|a\.run\.app)$",
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
