@@ -4,12 +4,10 @@ import { useMemo, useState } from 'react';
 import { Claim } from '@/lib/types';
 import { api } from '@/lib/api';
 import { Card, CardHeader, CardTitle, CardContent, Button, Badge, Input, Modal } from './ui';
-import { AgentResultsBreakdown } from './AgentResultsBreakdown';
 import { ReviewReasonsList } from './ReviewReasonsList';
 import { SummaryCard } from './SummaryCard';
 import { SettlementCard } from './SettlementCard';
-
-type ViewMode = 'summary' | 'detailed';
+import { EvidenceViewer } from './EvidenceViewer';
 
 export function InsurerClaimReview({
   claim,
@@ -22,7 +20,6 @@ export function InsurerClaimReview({
   settlementsEnabled: boolean;
   onRequireEnableSettlements: () => void;
 }) {
-  const [viewMode, setViewMode] = useState<ViewMode>('summary');
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -91,7 +88,6 @@ export function InsurerClaimReview({
                 <Badge status={claim.status} />
               </div>
               <p className="text-xs admin-text-secondary mt-1">{statusHint}</p>
-              {claim.description && <p className="text-sm admin-text-primary mt-3">{claim.description}</p>}
             </div>
             <div className="text-right">
               <div className="text-sm admin-text-secondary">Amount</div>
@@ -103,51 +99,58 @@ export function InsurerClaimReview({
           </div>
         </CardHeader>
 
-        <CardContent className="space-y-4">
-          {/* View toggle */}
-          <div className="flex items-center gap-2 p-1 rounded-lg bg-white/5 border border-white/10 w-fit">
-            <button
-              onClick={() => setViewMode('summary')}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                viewMode === 'summary' 
-                  ? 'bg-blue-cobalt text-white shadow-lg shadow-blue-cobalt/30' 
-                  : 'admin-text-secondary hover:admin-text-primary'
-              }`}
-            >
-              Summary
-            </button>
-            <button
-              onClick={() => setViewMode('detailed')}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                viewMode === 'detailed' 
-                  ? 'bg-blue-cobalt text-white shadow-lg shadow-blue-cobalt/30' 
-                  : 'admin-text-secondary hover:admin-text-primary'
-              }`}
-            >
-              Detailed
-            </button>
+        <CardContent className="space-y-6">
+          {/* Human Input Section */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 pb-2 border-b border-blue-500/30">
+              <svg className="w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+              <h3 className="text-sm font-semibold text-blue-400 uppercase tracking-wide">Claimant Information</h3>
+            </div>
+            
+            {/* Claim Description (Human Input) */}
+            {claim.description && (
+              <div className="pl-6">
+                <div className="flex items-start gap-2 mb-1">
+                  <span className="text-xs text-blue-300/70 font-medium">Description:</span>
+                </div>
+                <p className="text-sm text-blue-200 font-medium bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2">
+                  {claim.description}
+                </p>
+              </div>
+            )}
+
+            {/* Evidence Files (Human Input) */}
+            <div className="pl-6">
+              <EvidenceViewer claimId={claim.id} />
+            </div>
           </div>
 
-          {viewMode === 'summary' ? (
-            <>
-              <SummaryCard
-                confidence={claim.confidence}
-                decision={claim.decision}
-                summary={null}
-                approvedAmount={claim.approved_amount}
-                processingCosts={claim.processing_costs}
-                humanReviewRequired={claim.human_review_required}
-              />
+          {/* AI Agent Output Section */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 pb-2 border-b border-amber-500/30">
+              <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              <h3 className="text-sm font-semibold text-amber-400 uppercase tracking-wide">AI Agent Analysis</h3>
+            </div>
 
-              {(claim.decision === 'NEEDS_REVIEW' ||
-                claim.decision === 'APPROVED_WITH_REVIEW' ||
-                claim.human_review_required) && (
-                <ReviewReasonsList reviewReasons={null} humanReviewRequired={claim.human_review_required} />
-              )}
-            </>
-          ) : (
-            <AgentResultsBreakdown claimId={claim.id} />
-          )}
+            <SummaryCard
+              confidence={claim.confidence}
+              decision={claim.decision}
+              summary={null}
+              approvedAmount={claim.approved_amount}
+              processingCosts={claim.processing_costs}
+              humanReviewRequired={claim.human_review_required}
+            />
+
+            {(claim.decision === 'NEEDS_REVIEW' ||
+              claim.decision === 'APPROVED_WITH_REVIEW' ||
+              claim.human_review_required) && (
+              <ReviewReasonsList reviewReasons={null} humanReviewRequired={claim.human_review_required} />
+            )}
+          </div>
 
           {actionError && (
             <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
