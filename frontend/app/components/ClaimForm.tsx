@@ -45,6 +45,7 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
       // Show files as being uploaded (they're already visible in the UI)
       const result = await api.claims.create({
         claim_amount: parseFloat(amount),
+        description,
         files: files.length > 0 ? files : undefined,
       });
 

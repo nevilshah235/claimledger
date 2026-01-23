@@ -6,8 +6,17 @@ Uses Circle Wallets API for user-controlled wallets.
 """
 
 import os
+import uuid
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 import httpx
+from dotenv import load_dotenv
+
+# Load .env from backend directory (where this file is located)
+# Go up from src/services/circle_wallets.py to backend/
+backend_dir = Path(__file__).parent.parent.parent
+env_path = backend_dir / ".env"
+load_dotenv(dotenv_path=env_path)
 
 
 class CircleWalletsService:
@@ -38,6 +47,15 @@ class CircleWalletsService:
         """Close the HTTP client."""
         await self.http_client.aclose()
     
+    def validate_app_id(self) -> bool:
+        """
+        Validate that App ID is set and not empty.
+        
+        Returns:
+            True if App ID is valid, False otherwise
+        """
+        return bool(self.app_id and self.app_id.strip())
+    
     async def create_user(self, user_id: str) -> Dict[str, Any]:
         """
         Create or retrieve a Circle user.
@@ -55,20 +73,36 @@ class CircleWalletsService:
             f"{self.api_base_url}/users",
             json={"userId": user_id}
         )
+        
+        # 409 Conflict means user already exists - that's fine, return success
+        if response.status_code == 409:
+            # User already exists, try to get user info
+            # Note: Circle API doesn't have a direct "get user" endpoint,
+            # but we can proceed as if creation succeeded
+            return {"id": user_id, "userId": user_id}
+        
         response.raise_for_status()
         
         return response.json()["data"]
     
-    async def initialize_user(self, user_token: str) -> Dict[str, Any]:
+    async def initialize_user(
+        self, 
+        user_token: str,
+        account_type: Optional[str] = None,
+        blockchains: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         """
         Initialize user authentication challenge.
         
         This generates a challengeId that the frontend SDK uses to authenticate.
         
-        Note: For User-Controlled wallets, this requires userToken from frontend SDK.
+        Circle endpoint: POST /v1/w3s/user/initialize
+        Requires X-User-Token header.
         
         Args:
-            user_token: Circle user token (from frontend SDK authentication)
+            user_token: Circle user token (from create_user_token)
+            account_type: Optional account type (e.g., "SCA")
+            blockchains: Optional list of blockchains (e.g., ["ARC-TESTNET"])
             
         Returns:
             Challenge data including challengeId
@@ -76,14 +110,53 @@ class CircleWalletsService:
         if not self.api_key:
             raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
         
-        # For User-Controlled wallets, /user/initialize requires userToken
-        # The userToken comes from the frontend SDK after user authenticates
+        # Build request body
+        request_body = {
+            "idempotencyKey": str(uuid.uuid4())
+        }
+        if account_type:
+            request_body["accountType"] = account_type
+        if blockchains:
+            request_body["blockchains"] = blockchains
+        
+        # For User-Controlled wallets, /user/initialize requires userToken in header
         response = await self.http_client.post(
             f"{self.api_base_url}/user/initialize",
-            json={"userToken": user_token}
+            headers={
+                "X-User-Token": user_token
+            },
+            json=request_body
         )
+        
+        # 409 means user is already initialized - that's OK, they should have a wallet
+        if response.status_code == 409:
+            error_data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            error_code = error_data.get("code")
+            if error_code == 155106:  # User already initialized
+                # User is already initialized - return empty challenge (no challenge needed)
+                return {"challengeId": None, "alreadyInitialized": True}
+        
         response.raise_for_status()
         
+        return response.json()["data"]
+
+    async def create_user_token(self, user_id: str) -> Dict[str, Any]:
+        """
+        Create a user session token for the Web SDK (PIN flow).
+
+        Circle endpoint: POST /v1/w3s/users/token
+
+        Returns:
+            { "userToken": "...", "encryptionKey": "..." }
+        """
+        if not self.api_key:
+            raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
+
+        response = await self.http_client.post(
+            f"{self.api_base_url}/users/token",
+            json={"userId": user_id},
+        )
+        response.raise_for_status()
         return response.json()["data"]
     
     async def get_user_wallets(
@@ -92,11 +165,11 @@ class CircleWalletsService:
         blockchains: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
-        Get wallets for a user.
+        Get wallets for a user using user ID.
         
         Args:
             user_id: Circle user ID
-            blockchains: Optional list of blockchains to filter (e.g., ["ARC"])
+            blockchains: Optional list of blockchains to filter (e.g., ["ARC-TESTNET"])
             
         Returns:
             List of wallet objects
@@ -112,6 +185,37 @@ class CircleWalletsService:
             f"{self.api_base_url}/users/{user_id}/wallets",
             params=params
         )
+        
+        # 404 means user has no wallets yet - return empty list (not an error)
+        if response.status_code == 404:
+            return []
+        
+        response.raise_for_status()
+        
+        return response.json()["data"].get("wallets", [])
+    
+    async def list_wallets(self, user_token: str) -> List[Dict[str, Any]]:
+        """
+        List wallets for a user using user token (User-Controlled wallets).
+        
+        Circle endpoint: GET /v1/w3s/wallets
+        Requires X-User-Token header.
+        
+        Args:
+            user_token: Circle user token from create_user_token()
+            
+        Returns:
+            List of wallet objects
+        """
+        if not self.api_key:
+            raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
+        
+        response = await self.http_client.get(
+            f"{self.api_base_url}/wallets",
+            headers={
+                "X-User-Token": user_token
+            }
+        )
         response.raise_for_status()
         
         return response.json()["data"].get("wallets", [])
@@ -126,7 +230,7 @@ class CircleWalletsService:
         
         Args:
             user_id: Circle user ID
-            blockchains: List of blockchains (default: ["ARC"])
+            blockchains: List of blockchains (default: ["ARC-TESTNET"])
             
         Returns:
             Wallet data including walletId and address
@@ -135,7 +239,7 @@ class CircleWalletsService:
             raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
         
         if blockchains is None:
-            blockchains = ["ARC"]  # Default to Arc
+            blockchains = ["ARC-TESTNET"]  # Default to Arc Testnet
         
         response = await self.http_client.post(
             f"{self.api_base_url}/wallets",

@@ -25,6 +25,7 @@ class Claim(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     claimant_address = Column(String(42), nullable=False)  # Ethereum address
     claim_amount = Column(Numeric(18, 2), nullable=False)  # USDC amount
+    description = Column(Text, nullable=True)  # Claim description (free text)
     status = Column(
         String(20),
         nullable=False,

@@ -57,19 +57,9 @@ export function DataRequestCard({
     setError(null);
 
     try {
-      // Note: This assumes we have an endpoint to add additional evidence
-      // For now, we'll use the existing claim update or create a new endpoint
-      // This is a placeholder - actual implementation depends on backend API
-      const formData = new FormData();
-      files.forEach((file) => {
-        formData.append('files', file);
-      });
-
-      // TODO: Implement backend endpoint for adding additional evidence
-      // await api.claims.addEvidence(claimId, formData);
-      
-      // For now, just show success message
-      alert('Files uploaded successfully! Please re-trigger evaluation.');
+      // Upload evidence and restart evaluation automatically
+      await api.claims.addEvidence(claimId, files);
+      await api.agent.evaluate(claimId);
       
       if (onFilesUploaded) {
         onFilesUploaded();
@@ -169,7 +159,7 @@ export function DataRequestCard({
 
       <div className="mt-4 pt-4 border-t border-slate-700">
         <p className="text-xs text-slate-500">
-          After uploading, you can re-trigger the evaluation to process the new evidence.
+          After uploading, evaluation restarts automatically.
         </p>
       </div>
     </Card>

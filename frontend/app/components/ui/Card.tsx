@@ -61,7 +61,7 @@ export const CardTitle = forwardRef<HTMLHeadingElement, CardTitleProps>(
     return (
       <h3
         ref={ref}
-        className={`text-xl font-semibold text-white ${className}`}
+        className={`text-xl font-semibold text-text-primary ${className}`}
         {...props}
       >
         {children}
@@ -99,7 +99,7 @@ export const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(
     return (
       <div
         ref={ref}
-        className={`mt-4 pt-4 border-t border-white/10 ${className}`}
+        className={`mt-4 pt-4 border-t border-border ${className}`}
         {...props}
       >
         {children}

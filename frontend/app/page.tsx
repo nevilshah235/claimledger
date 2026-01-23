@@ -1,38 +1,28 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
 import { Navbar } from './components/Navbar';
-import { Button, Card } from './components/ui';
+import { Card } from './components/ui/Card';
 import { api } from '@/lib/api';
+import { ChatAssistant } from './components/ChatAssistant';
+import { FinanceKpiStrip } from './components/FinanceKpiStrip';
+import Image from 'next/image';
 
 const features = [
   {
-    icon: (
-      <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-      </svg>
-    ),
+    icon: '/icons/gemini-logo.svg',
     title: 'AI Agent',
     subtitle: 'Powered by Gemini',
-    description: 'Autonomous claim evaluation with multimodal analysis of documents and images.',
+    description: 'Autonomous claim evaluation with multimodal document and image analysis.',
   },
   {
-    icon: (
-      <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-      </svg>
-    ),
+    icon: '/icons/circle-logo.svg',
     title: 'x402 Payments',
     subtitle: 'Circle Gateway',
     description: 'Real micropayments for each verification step. Pay-per-use AI services.',
   },
   {
-    icon: (
-      <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
+    icon: '/icons/arc-logo.svg',
     title: 'USDC Settlement',
     subtitle: 'On Arc Blockchain',
     description: 'Instant, transparent settlements in USDC on the Arc blockchain network.',
@@ -49,6 +39,7 @@ const stats = [
 export default function HomePage() {
   const [walletAddress, setWalletAddress] = useState<string | undefined>();
   const [userRole, setUserRole] = useState<string | undefined>();
+  const [revealed, setRevealed] = useState<Set<string>>(() => new Set());
 
   // Handle wallet connection
   const handleConnect = (address: string, role: string) => {
@@ -80,179 +71,305 @@ export default function HomePage() {
     loadUserInfo();
   }, []);
 
+  // Scroll reveal for sections and staggered items
+  useEffect(() => {
+    const sectionEls = Array.from(document.querySelectorAll<HTMLElement>('[data-reveal-id]'));
+    const staggerEls = Array.from(document.querySelectorAll<HTMLElement>('[data-stagger]'));
+    
+    if (sectionEls.length === 0 && staggerEls.length === 0) return;
+
+    // Section observer with improved settings
+    const sectionObs = new IntersectionObserver(
+      (entries) => {
+        setRevealed((prev) => {
+          const next = new Set(prev);
+          for (const e of entries) {
+            if (e.isIntersecting) {
+              const target = e.target as HTMLElement;
+              next.add(target.dataset.revealId || '');
+              // Remove will-change after animation completes for performance
+              setTimeout(() => {
+                target.style.willChange = 'auto';
+              }, 1000);
+            }
+          }
+          return next;
+        });
+      },
+      { 
+        threshold: 0.05,
+        rootMargin: '0px 0px -10% 0px'
+      }
+    );
+
+    // Staggered items observer
+    const staggerObs = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const target = entry.target as HTMLElement;
+            target.classList.add('is-visible');
+            // Remove will-change after animation completes for performance
+            setTimeout(() => {
+              target.style.willChange = 'auto';
+            }, 800);
+          }
+        });
+      },
+      { 
+        threshold: 0.1,
+        rootMargin: '0px 0px -5% 0px'
+      }
+    );
+
+    sectionEls.forEach((el) => sectionObs.observe(el));
+    staggerEls.forEach((el, index) => {
+      // Add staggered delay via CSS custom property
+      el.style.setProperty('--stagger-delay', `${index * 100}ms`);
+      el.style.transitionDelay = `var(--stagger-delay, 0ms)`;
+      staggerObs.observe(el);
+    });
+
+    return () => {
+      sectionObs.disconnect();
+      staggerObs.disconnect();
+    };
+  }, []);
+
+
   return (
     <div className="min-h-screen">
       <Navbar 
-        walletAddress={walletAddress}
-        role={userRole}
         onConnect={handleConnect}
         onDisconnect={handleDisconnect}
       />
+      <ChatAssistant />
       
       {/* Hero Section */}
-      <section className="pt-32 pb-20 px-4">
-        <div className="max-w-6xl mx-auto text-center">
-          {/* Badge */}
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 border border-white/10 mb-8">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-sm text-slate-300">Live on Arc Testnet</span>
-          </div>
+      <section className="pt-24 pb-14 sm:pb-16 px-4 section-gradient-1">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center lg:text-left">
+            {/* Title - with fade-in + scale effect */}
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight mb-6 leading-[1.05] headline-fade">
+              <span className="text-text-primary">AI-powered evaluation </span>
+              <span className="headline-accent text-gradient-accent">with audit-ready evidence.</span>
+            </h1>
 
-          {/* Title */}
-          <h1 className="text-5xl md:text-7xl font-bold mb-6">
-            <span className="text-white">AI-Powered</span>
-            <br />
-            <span className="text-gradient">Insurance Claims</span>
-          </h1>
-
-          {/* Subtitle */}
-          <p className="text-xl text-slate-400 max-w-2xl mx-auto mb-10">
-            Submit claims, get instant AI evaluation, and receive USDC settlements 
-            on the Arc blockchain. Transparent, fast, and trustless.
-          </p>
-
-          {/* CTAs */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="/claimant">
-              <Button size="lg">
-                Submit a Claim
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                </svg>
-              </Button>
-            </Link>
-            <Link href="/insurer">
-              <Button variant="secondary" size="lg">
-                View as Insurer
-              </Button>
-            </Link>
+              {/* Subtitle */}
+              <p className="text-lg sm:text-xl text-text-secondary leading-7 max-w-2xl mx-auto lg:mx-0 mb-8">
+                Submit insurance claims, get AI-assisted evaluation, and settle payouts.
+              </p>
           </div>
         </div>
       </section>
 
-      {/* Stats Section */}
-      <section className="py-12 px-4">
+      {/* 1-2-3 Step Framework Section */}
+      <section
+        id="steps"
+        data-reveal-id="steps"
+        className={`scroll-mt-16 py-20 px-4 section-reveal section-gradient-2 section-transition ${revealed.has('steps') ? 'is-visible' : ''}`}
+      >
         <div className="max-w-6xl mx-auto">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {stats.map((stat, index) => (
-              <Card key={index} padding="md" className="text-center">
-                <div className="stat-value">{stat.value}</div>
-                <div className="stat-label">{stat.label}</div>
-              </Card>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Features Section */}
-      <section className="py-20 px-4">
-        <div className="max-w-6xl mx-auto">
-          <div className="text-center mb-12">
-            <h2 className="text-3xl font-bold text-white mb-4">How It Works</h2>
-            <p className="text-slate-400 max-w-xl mx-auto">
-              Three simple steps from claim submission to USDC settlement
+          <div className="text-center mb-16">
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-snug mb-4">
+              <span className="text-text-primary">Three steps to </span>
+              <span className="text-gradient-primary">your claim</span>
+            </h2>
+            <p className="text-lg text-text-secondary max-w-2xl mx-auto">
+              That's three steps closer to fast, secure claim processing.
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
-            {features.map((feature, index) => (
-              <Card key={index} hover className="relative overflow-hidden">
-                {/* Step number */}
-                <div className="absolute top-4 right-4 w-8 h-8 rounded-full bg-white/5 flex items-center justify-center text-sm font-bold text-slate-400">
-                  {index + 1}
-                </div>
-
-                {/* Icon */}
-                <div className="w-14 h-14 rounded-xl gradient-hero flex items-center justify-center mb-4 text-white">
-                  {feature.icon}
-                </div>
-
-                {/* Content */}
-                <h3 className="text-xl font-semibold text-white mb-1">
-                  {feature.title}
+          <div className="grid md:grid-cols-3 gap-8">
+            {[
+              {
+                number: '1',
+                title: 'Submit your claim',
+                description: 'Upload your documents and claim details through our secure portal. Our system accepts photos, PDFs, and other common formats.',
+                icon: '📤'
+              },
+              {
+                number: '2',
+                title: 'AI evaluation',
+                description: 'Our AI agent powered by Gemini analyzes your documents, extracts key information, and evaluates your claim with audit-ready evidence.',
+                icon: '🤖'
+              },
+              {
+                number: '3',
+                title: 'Instant settlement',
+                description: 'Get approved claims settled instantly in USDC on the Arc blockchain. Transparent, verifiable, and secure.',
+                icon: '✅'
+              }
+            ].map((step, index) => (
+              <div
+                key={index}
+                data-stagger={index}
+                className="stagger-item text-center"
+              >
+                <div className="step-number mb-4">{step.number}</div>
+                <div className="text-4xl mb-4">{step.icon}</div>
+                <h3 className="text-xl sm:text-2xl font-bold text-text-primary mb-3">
+                  {step.title}
                 </h3>
-                <p className="text-sm text-cyan-400 mb-3">{feature.subtitle}</p>
-                <p className="text-slate-400 text-sm leading-relaxed">
-                  {feature.description}
+                <p className="text-base text-text-secondary leading-7">
+                  {step.description}
                 </p>
-              </Card>
+              </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* Demo Flow Section */}
-      <section className="py-20 px-4">
-        <div className="max-w-4xl mx-auto">
-          <Card padding="lg">
+      {/* Claim Flow (Features) */}
+      <section
+        id="claim-flow"
+        data-reveal-id="claim-flow"
+        className={`scroll-mt-16 py-14 sm:py-16 px-4 section-reveal section-gradient-1 ${revealed.has('claim-flow') ? 'is-visible' : ''}`}
+      >
+        <div className="max-w-6xl mx-auto">
+          <div className="rounded-3xl bg-white/75 backdrop-blur-[2px] border border-border shadow-sm px-6 sm:px-10 py-10">
+            <div className="text-center mb-12">
+              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight leading-snug mb-4">
+                <span className="text-text-primary">Powered by </span>
+                <span className="text-gradient-primary">cutting-edge technology</span>
+              </h2>
+              <p className="text-base leading-7 text-text-secondary max-w-xl mx-auto">
+                A clear workflow for claimants and insurers—from submission to settlement.
+              </p>
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-6" style={{ overflow: 'visible' }}>
+              {features.map((feature, index) => {
+                const isEven = index % 2 === 1;
+                return (
+                <Card 
+                  key={index} 
+                  hover 
+                  className="relative card-enhanced stagger-item" 
+                  data-stagger={index}
+                  style={{ overflow: 'visible' }}
+                >
+                  {/* Breakout element - alternate between golden-yellow and darker navy blue */}
+                  <div className={`absolute -top-4 -right-4 w-24 h-24 rounded-full blur-xl ${isEven ? 'bg-blue-cobalt/10' : 'bg-primary/10'}`} />
+                  
+                  {/* Icon */}
+                  <div className="mb-4 flex items-center justify-start min-h-[60px] overflow-visible w-full">
+                    <Image
+                      src={feature.icon}
+                      alt={feature.title}
+                      width={220}
+                      height={56}
+                      className="h-14 sm:h-16 w-auto object-contain object-left"
+                      style={{ maxWidth: 'none' }}
+                    />
+                  </div>
+
+                  {/* Content */}
+                  <h3 className="text-lg sm:text-xl font-semibold leading-snug text-text-primary mb-1">
+                    {feature.title}
+                  </h3>
+                  <p className="text-sm text-text-secondary mb-3">{feature.subtitle}</p>
+                  <p className="text-sm leading-6 text-text-muted line-clamp-2">
+                    {feature.description}
+                  </p>
+                </Card>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <FinanceKpiStrip />
+
+      {/* Trust / Safety Section */}
+      <section
+        id="trust"
+        data-reveal-id="trust"
+        className={`scroll-mt-16 py-20 px-4 section-reveal section-gradient-2 section-transition ${revealed.has('trust') ? 'is-visible' : ''}`}
+      >
+        <div className="max-w-6xl mx-auto">
+          <div className="rounded-3xl bg-white/60 backdrop-blur-[2px] border border-border shadow-sm px-6 sm:px-10 py-10">
+            <div className="text-center mb-10">
+              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight leading-snug mb-3">
+                <span className="text-text-primary">Built for </span>
+                <span className="text-gradient-primary">trust</span>
+              </h2>
+              <p className="text-base leading-7 text-text-secondary max-w-2xl mx-auto">
+                Audit-ready decisions, clear evidence trails, and safer payouts.
+              </p>
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-6">
+              <Card hover className="text-center card-enhanced stagger-item" data-stagger={0}>
+                <div className="text-3xl mb-3">📋</div>
+                <div className="text-text-primary font-semibold mb-2">Audit-ready decisions</div>
+                <div className="text-sm text-text-secondary">
+                  Keep a structured trail of evidence and reasoning for every claim.
+                </div>
+              </Card>
+              <Card hover className="text-center card-enhanced stagger-item" data-stagger={1}>
+                <div className="text-3xl mb-3">🔒</div>
+                <div className="text-text-primary font-semibold mb-2">Payout safety</div>
+                <div className="text-sm text-text-secondary">
+                  On-chain settlement makes outcomes verifiable and reduces disputes.
+                </div>
+              </Card>
+              <Card hover className="text-center card-enhanced stagger-item" data-stagger={2}>
+                <div className="text-3xl mb-3">🔍</div>
+                <div className="text-text-primary font-semibold mb-2">Evidence trail</div>
+                <div className="text-sm text-text-secondary">
+                  Collect the right documents upfront and request more when needed.
+                </div>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Metrics (moved to bottom) */}
+      <section
+        data-reveal-id="metrics"
+        className={`py-12 px-4 section-reveal section-gradient-1 ${revealed.has('metrics') ? 'is-visible' : ''}`}
+      >
+        <div className="max-w-6xl mx-auto">
+          <div className="rounded-3xl bg-white/75 backdrop-blur-[2px] border border-border shadow-sm px-6 sm:px-10 py-10">
             <div className="text-center mb-8">
-              <h2 className="text-2xl font-bold text-white mb-2">Demo Flow</h2>
-              <p className="text-slate-400">Watch a claim go from submission to settlement</p>
+              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight leading-snug mb-3">
+                <span className="text-text-primary">Performance </span>
+                <span className="text-gradient-primary">metrics</span>
+              </h2>
+              <p className="text-base leading-7 text-text-secondary max-w-xl mx-auto">
+                Key operational metrics that drive our platform
+              </p>
             </div>
-
-            {/* Flow visualization */}
-            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-              {/* Step 1 */}
-              <div className="flex-1 text-center">
-                <div className="w-12 h-12 rounded-full bg-blue-500/20 border border-blue-500/50 flex items-center justify-center mx-auto mb-3">
-                  <span className="text-blue-400 font-bold">1</span>
-                </div>
-                <p className="text-sm font-medium text-white">Submit Claim</p>
-                <p className="text-xs text-slate-400">Upload evidence</p>
-              </div>
-
-              {/* Arrow */}
-              <div className="hidden md:block text-slate-600">
-                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                </svg>
-              </div>
-
-              {/* Step 2 */}
-              <div className="flex-1 text-center">
-                <div className="w-12 h-12 rounded-full bg-cyan-500/20 border border-cyan-500/50 flex items-center justify-center mx-auto mb-3">
-                  <span className="text-cyan-400 font-bold">2</span>
-                </div>
-                <p className="text-sm font-medium text-white">AI Evaluation</p>
-                <p className="text-xs text-slate-400">$0.35 in x402 fees</p>
-              </div>
-
-              {/* Arrow */}
-              <div className="hidden md:block text-slate-600">
-                <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                </svg>
-              </div>
-
-              {/* Step 3 */}
-              <div className="flex-1 text-center">
-                <div className="w-12 h-12 rounded-full bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center mx-auto mb-3">
-                  <span className="text-emerald-400 font-bold">3</span>
-                </div>
-                <p className="text-sm font-medium text-white">Settlement</p>
-                <p className="text-xs text-slate-400">USDC on Arc</p>
-              </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {stats.map((stat, index) => (
+                <Card key={index} padding="md" className="text-center card-enhanced stagger-item" data-stagger={index}>
+                  <div className="stat-value">{stat.value}</div>
+                  <div className="stat-label">{stat.label}</div>
+                </Card>
+              ))}
             </div>
-
-            {/* CTA */}
-            <div className="text-center mt-8">
-              <Link href="/claimant">
-                <Button>Try the Demo</Button>
-              </Link>
-            </div>
-          </Card>
+          </div>
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="py-8 px-4 border-t border-white/10">
+      <footer className="py-8 px-4 border-t border-border">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded gradient-hero" />
-            <span className="text-sm text-slate-400">ClaimLedger Demo</span>
+            <Image
+              src="/uclaim-logo-transparent.png"
+              alt="UClaim"
+              width={120}
+              height={30}
+              className="h-6 w-auto"
+            />
+            <span className="sr-only">UClaim</span>
           </div>
-          <div className="flex items-center gap-4 text-sm text-slate-400">
-            <span>Built with Google Agents Framework + Circle Gateway + Arc</span>
+          <div className="flex items-center gap-4 text-sm text-text-secondary">
+            <span>Fast claims. Safe payouts.</span>
           </div>
         </div>
       </footer>

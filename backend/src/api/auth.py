@@ -16,6 +16,7 @@ Legacy endpoints (kept for backward compatibility):
 import uuid
 from typing import Optional
 import httpx
+import os
 from fastapi import APIRouter, HTTPException, Depends, Header, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
@@ -29,7 +30,7 @@ from ..services.auth import (
     create_access_token,
     decode_access_token
 )
-from ..services.developer_wallets import DeveloperWalletsService
+from ..services.circle_wallets import CircleWalletsService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer()
@@ -125,9 +126,9 @@ def get_current_user(
     return user
 
 
-def get_developer_wallets_service() -> DeveloperWalletsService:
-    """Get Developer-Controlled Wallets service instance."""
-    return DeveloperWalletsService()
+def get_circle_wallets_service() -> CircleWalletsService:
+    """Get User-Controlled Wallets service instance."""
+    return CircleWalletsService()
 
 
 # ============================================================================
@@ -138,18 +139,19 @@ def get_developer_wallets_service() -> DeveloperWalletsService:
 async def register(
     request: RegisterRequest,
     db: Session = Depends(get_db),
-    wallet_service: DeveloperWalletsService = Depends(get_developer_wallets_service)
+    circle_service: CircleWalletsService = Depends(get_circle_wallets_service)
 ):
     """
     Register a new user (claimant or insurer).
     
-    Creates user account and automatically provisions a Developer-Controlled wallet.
+    Creates user account and Circle user account for User-Controlled wallets with PIN.
+    Wallets are created when users log in and complete PIN challenge via frontend SDK.
     
     Returns:
     - user_id: User identifier
     - email: User email
     - role: User role (claimant/insurer)
-    - wallet_address: Provisioned wallet address
+    - wallet_address: Will be set when user creates wallet via frontend (placeholder initially)
     - access_token: JWT token for authentication
     """
     # Validate role
@@ -178,46 +180,29 @@ async def register(
         db.add(user)
         db.flush()  # Get user.id
         
-        # Try to create wallet for user (optional - graceful fallback if Circle not configured)
+        # Create Circle user account for User-Controlled wallets
+        # Note: Wallets are created when users log in and complete PIN challenge via frontend SDK
         wallet_address = None
         try:
-            wallet_data = await wallet_service.create_wallet(
-                blockchains=["ARC"],  # Arc blockchain
-                account_type="SCA"  # Smart Contract Account
-            )
-            
-            # Store wallet mapping
-            user_wallet = UserWallet(
-                user_id=user.id,
-                wallet_address=wallet_data["address"],
-                circle_wallet_id=wallet_data["wallet_id"],
-                wallet_set_id=wallet_data.get("wallet_set_id")
-            )
-            db.add(user_wallet)
-            wallet_address = wallet_data["address"]
-        except (ValueError, httpx.HTTPStatusError, Exception) as wallet_error:
-            # Wallet creation failed (likely missing Circle credentials or entity secret not registered)
-            # Allow registration to proceed without wallet for development/testing
-            error_msg = str(wallet_error)
+            if circle_service.app_id:
+                # Create Circle user account
+                circle_user = await circle_service.create_user(user.id)
+                import logging
+                logging.info(f"Created Circle user for {user.email}: {circle_user.get('id')}")
+            else:
+                import logging
+                logging.warning(f"CIRCLE_APP_ID not set - Circle user not created for {user.email}")
+        except httpx.HTTPStatusError as circle_error:
+            # User might already exist in Circle (409) - that's OK
+            if circle_error.response.status_code == 409:
+                import logging
+                logging.info(f"Circle user already exists for {user.email}")
+            else:
+                import logging
+                logging.warning(f"Circle user creation failed for {user.email}: {circle_error.response.status_code}")
+        except Exception as circle_error:
             import logging
-            logging.warning(f"Wallet creation skipped for user {user.id}: {error_msg}")
-            
-            # For testnet/development: Generate a mock wallet address
-            # This allows testing without Circle registration
-            import hashlib
-            mock_seed = f"{user.id}{user.email}".encode()
-            mock_hash = hashlib.sha256(mock_seed).hexdigest()[:40]
-            wallet_address = f"0x{mock_hash}"  # Valid Ethereum address format
-            
-            # Store mock wallet (can be replaced with real wallet later)
-            user_wallet = UserWallet(
-                user_id=user.id,
-                wallet_address=wallet_address,
-                circle_wallet_id="mock_wallet",  # Placeholder
-                wallet_set_id=None
-            )
-            db.add(user_wallet)
-            logging.info(f"Created mock wallet {wallet_address} for user {user.id} (testnet mode)")
+            logging.warning(f"Circle user creation error for {user.email}: {circle_error}")
         
         db.commit()
         db.refresh(user)
@@ -227,9 +212,9 @@ async def register(
             data={"sub": user.id, "email": user.email, "role": user.role}
         )
         
-        # If no wallet, use a placeholder (user can create wallet later)
-        if not wallet_address:
-            wallet_address = "0x0000000000000000000000000000000000000000"  # Placeholder
+        # Wallet will be created when user logs in and completes PIN challenge
+        # Use placeholder for now
+        wallet_address = "0x0000000000000000000000000000000000000000"  # Placeholder until wallet created
         
         return RegisterResponse(
             user_id=user.id,
@@ -335,41 +320,57 @@ async def get_current_user_info(
 async def get_wallet_info(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    wallet_service: DeveloperWalletsService = Depends(get_developer_wallets_service)
+    circle_service: CircleWalletsService = Depends(get_circle_wallets_service)
 ):
     """
     Get current user's wallet information.
     
+    For User-Controlled wallets, fetches wallet from Circle API using user ID.
     Returns wallet address, Circle wallet ID, and balance information.
     """
     user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
     
+    # If no wallet in DB, try to fetch from Circle
+    if not user_wallet:
+        try:
+            if circle_service.app_id:
+                # Get wallets from Circle for this user
+                wallets = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
+                if wallets and len(wallets) > 0:
+                    wallet = wallets[0]
+                    # Store in DB for future reference
+                    user_wallet = UserWallet(
+                        user_id=current_user.id,
+                        wallet_address=wallet.get("address") or wallet.get("walletAddress"),
+                        circle_wallet_id=wallet.get("id") or wallet.get("walletId"),
+                        wallet_set_id=wallet.get("walletSetId")
+                    )
+                    db.add(user_wallet)
+                    db.commit()
+        except Exception as e:
+            import logging
+            logging.warning(f"Failed to fetch wallet from Circle for user {current_user.id}: {e}")
+    
     if not user_wallet:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Wallet not found for user"
+            detail="Wallet not found for user. Please create a wallet by logging in and completing the PIN challenge."
         )
     
-    # Get wallet balance
+    # Get wallet balance (if available)
     balance = None
     try:
-        balance_data = await wallet_service.get_wallet_balance(user_wallet.circle_wallet_id)
-        balance = balance_data
+        # For User-Controlled wallets, balance fetching might require user token
+        # For now, return None - can be enhanced later
+        pass
     except Exception:
         pass  # Balance fetch is optional
-    
-    # Get wallet details
-    wallet_details = None
-    try:
-        wallet_details = await wallet_service.get_wallet(user_wallet.circle_wallet_id)
-    except Exception:
-        pass
     
     return WalletInfoResponse(
         wallet_address=user_wallet.wallet_address,
         circle_wallet_id=user_wallet.circle_wallet_id,
         wallet_set_id=user_wallet.wallet_set_id,
-        blockchain=wallet_details.get("blockchain") if wallet_details else "ARC",
+        blockchain="ARC",  # Default to ARC
         balance=balance
     )
 
@@ -420,6 +421,225 @@ class WalletResponse(BaseModel):
 def get_circle_service() -> CircleWalletsService:
     """Get Circle Wallets service instance (deprecated)."""
     return CircleWalletsService()
+
+
+# ============================================================================
+# Circle User-Controlled Wallet Connect (Web SDK)
+# ============================================================================
+
+class CircleConnectInitResponse(BaseModel):
+    """Init payload for Circle Web SDK connect (user-controlled wallets)."""
+    available: bool
+    app_id: Optional[str] = None
+    user_token: Optional[str] = None
+    encryption_key: Optional[str] = None
+    challenge_id: Optional[str] = None
+    message: Optional[str] = None
+
+
+class CircleConnectCompleteResponse(BaseModel):
+    """Completion response after Circle connect finishes."""
+    success: bool
+    wallet_address: Optional[str] = None
+    circle_wallet_id: Optional[str] = None
+
+
+@router.post("/circle/connect/init", response_model=CircleConnectInitResponse)
+async def circle_connect_init(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    circle_service: CircleWalletsService = Depends(get_circle_service),
+):
+    """
+    Initialize Circle User-Controlled wallet connect for the Web SDK.
+
+    Returns app_id + (user_token, encryption_key) + challenge_id for the SDK to execute.
+    If Circle is not configured, returns available=false.
+    """
+    import logging
+    
+    # Log App ID for debugging (masked for security)
+    app_id = circle_service.app_id
+    if app_id:
+        masked_id = f"{app_id[:8]}...{app_id[-4:]}" if len(app_id) > 12 else "***"
+        logging.info(f"Using Circle App ID: {masked_id}")
+    else:
+        logging.warning("CIRCLE_APP_ID is not set")
+    
+    # Early validation: Check App ID before proceeding
+    if not circle_service.validate_app_id():
+        return CircleConnectInitResponse(
+            available=False,
+            message="Circle App ID is not configured. Please set CIRCLE_APP_ID in backend/.env"
+        )
+    
+    # If Circle isn't configured, the service will raise; return a friendly payload instead.
+    try:
+        # Ensure Circle "user" exists (Circle userId is our user.id)
+        # 409 is OK - means user already exists
+        try:
+            await circle_service.create_user(current_user.id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 409:
+                # User already exists - that's fine, continue
+                import logging
+                logging.info(f"Circle user already exists for {current_user.email}")
+            else:
+                raise  # Re-raise if it's a different error
+
+        # Create a Web SDK session token (PIN flow) -> userToken + encryptionKey
+        token_data = await circle_service.create_user_token(current_user.id)
+        user_token = token_data.get("userToken")
+        encryption_key = token_data.get("encryptionKey")
+
+        if not user_token or not encryption_key:
+            return CircleConnectInitResponse(
+                available=False,
+                message="Circle token issuance failed (missing session credentials).",
+            )
+
+        # Initialize user to get a challengeId
+        # Use ARC-TESTNET (not ARC) for Circle API
+        init_data = await circle_service.initialize_user(
+            user_token,
+            account_type="SCA",
+            blockchains=["ARC-TESTNET"]
+        )
+        challenge_id = init_data.get("challengeId") or init_data.get("challenge_id")
+
+        if not challenge_id:
+            return CircleConnectInitResponse(
+                available=False,
+                message="Circle initialization failed (missing challengeId).",
+            )
+
+        return CircleConnectInitResponse(
+            available=True,
+            app_id=circle_service.app_id or "",
+            user_token=user_token,
+            encryption_key=encryption_key,
+            challenge_id=challenge_id,
+        )
+    except httpx.HTTPStatusError as e:
+        # Handle specific HTTP errors
+        error_msg = ""
+        if e.response.headers.get("content-type", "").startswith("application/json"):
+            error_data = e.response.json()
+            error_msg = error_data.get("message", error_data.get("detail", ""))
+        
+        if e.response.status_code == 400:
+            error_lower = error_msg.lower()
+            if "app" in error_lower and ("id" in error_lower or "not recognized" in error_lower):
+                # App ID not recognized
+                masked_app_id = f"{circle_service.app_id[:8]}...{circle_service.app_id[-4:]}" if circle_service.app_id and len(circle_service.app_id) > 12 else "N/A"
+                logging.error(f"Circle App ID validation failed: {error_msg}")
+                logging.error(f"App ID being used: {masked_app_id}")
+                return CircleConnectInitResponse(
+                    available=False,
+                    message=f"Circle App ID is not recognized. Please verify CIRCLE_APP_ID in backend/.env matches your Circle Developer Console App ID. Error: {error_msg}",
+                )
+        
+        if e.response.status_code == 409:
+            # User already exists - try to continue anyway
+            try:
+                token_data = await circle_service.create_user_token(current_user.id)
+                user_token = token_data.get("userToken")
+                encryption_key = token_data.get("encryptionKey")
+                if user_token and encryption_key:
+                    init_data = await circle_service.initialize_user(
+                        user_token,
+                        account_type="SCA",
+                        blockchains=["ARC-TESTNET"]
+                    )
+                    challenge_id = init_data.get("challengeId") or init_data.get("challenge_id")
+                    if challenge_id:
+                        return CircleConnectInitResponse(
+                            available=True,
+                            app_id=circle_service.app_id or "",
+                            user_token=user_token,
+                            encryption_key=encryption_key,
+                            challenge_id=challenge_id,
+                        )
+            except Exception:
+                pass  # Fall through to error response
+        
+        return CircleConnectInitResponse(
+            available=False,
+            message=f"Circle connect error (HTTP {e.response.status_code}): {error_msg or e.response.text[:200]}",
+        )
+    except Exception as e:
+        import logging
+        logging.exception("Circle connect init error")
+        return CircleConnectInitResponse(
+            available=False,
+            message=f"Circle connect not available: {str(e)}",
+        )
+
+
+@router.post("/circle/connect/complete", response_model=CircleConnectCompleteResponse)
+async def circle_connect_complete(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    circle_service: CircleWalletsService = Depends(get_circle_service),
+):
+    """
+    After the Web SDK challenge succeeds, fetch the user's Circle wallet and persist mapping.
+    """
+    try:
+        wallets = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
+        if not wallets:
+            # fallback: fetch without chain filter
+            wallets = await circle_service.get_user_wallets(current_user.id, blockchains=None)
+
+        if not wallets:
+            # No wallets found - this is expected if user hasn't completed PIN challenge yet
+            return CircleConnectCompleteResponse(
+                success=False,
+                wallet_address=None,
+                circle_wallet_id=None
+            )
+
+        wallet = wallets[0]
+        wallet_id = wallet.get("walletId") or wallet.get("id") or wallet.get("wallet_id")
+        address = wallet.get("address")
+
+        if not wallet_id or not address:
+            raise HTTPException(status_code=500, detail="Malformed Circle wallet payload")
+
+        # Upsert user_wallet mapping
+        user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+        if user_wallet:
+            user_wallet.wallet_address = address
+            user_wallet.circle_wallet_id = wallet_id
+            user_wallet.wallet_set_id = wallet.get("walletSetId") or wallet.get("wallet_set_id") or user_wallet.wallet_set_id
+        else:
+            user_wallet = UserWallet(
+                user_id=current_user.id,
+                wallet_address=address,
+                circle_wallet_id=wallet_id,
+                wallet_set_id=wallet.get("walletSetId") or wallet.get("wallet_set_id"),
+            )
+            db.add(user_wallet)
+
+        db.commit()
+
+        return CircleConnectCompleteResponse(success=True, wallet_address=address, circle_wallet_id=wallet_id)
+    except HTTPException:
+        raise
+    except httpx.HTTPStatusError as e:
+        # Handle HTTP errors gracefully
+        if e.response.status_code == 404:
+            # 404 means no wallets found - expected if user hasn't completed PIN challenge
+            return CircleConnectCompleteResponse(
+                success=False,
+                wallet_address=None,
+                circle_wallet_id=None
+            )
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to complete Circle connect: {str(e)}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to complete Circle connect: {str(e)}")
 
 
 @router.post("/circle/init", response_model=CircleInitResponse, deprecated=True)

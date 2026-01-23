@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Claim, User
 from ..api.auth import get_current_user
+from ..services.circle_wallets import CircleWalletsService
 
 router = APIRouter(prefix="/blockchain", tags=["blockchain"])
 
@@ -91,6 +92,14 @@ async def settle_claim(
         raise HTTPException(
             status_code=400,
             detail="No approved amount set for this claim"
+        )
+    
+    # Validate Circle App ID before allowing settlement
+    circle_service = CircleWalletsService()
+    if not circle_service.validate_app_id():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Circle App ID is not configured. Settlement requires valid Circle setup."
         )
     
     # Determine recipient

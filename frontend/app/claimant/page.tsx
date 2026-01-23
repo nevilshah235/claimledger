@@ -1,182 +1,232 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Navbar } from '../components/Navbar';
 import { ClaimForm } from '../components/ClaimForm';
 import { ClaimStatus } from '../components/ClaimStatus';
-import { Card } from '../components/ui';
+import { Card, Button } from '../components/ui';
 import { Claim } from '@/lib/types';
 import { api } from '@/lib/api';
+import { RequireRole } from '../components/RequireRole';
+import { useAuth } from '../providers/AuthProvider';
+import { EnableSettlementsModal, useSettlementsEnabled } from '../components/EnableSettlementsModal';
+import { ChatAssistant } from '../components/ChatAssistant';
 
 export default function ClaimantPage() {
-  const [walletAddress, setWalletAddress] = useState<string | undefined>();
-  const [userRole, setUserRole] = useState<string | undefined>();
-  const [currentClaimId, setCurrentClaimId] = useState<string | null>(null);
-  const [claim, setClaim] = useState<Claim | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { walletAddress, role, logout, refresh } = useAuth();
+  const { enabled: settlementsEnabled } = useSettlementsEnabled();
+  const [showEnableSettlements, setShowEnableSettlements] = useState(false);
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  const [showNewClaim, setShowNewClaim] = useState(false);
+  const [autoEvaluateClaimId, setAutoEvaluateClaimId] = useState<string | null>(null);
+  const [loadingClaims, setLoadingClaims] = useState(false);
+
+  // Auto-prompt after login (skippable; off-chain features still work)
+  useEffect(() => {
+    if (settlementsEnabled) return;
+    setShowEnableSettlements(true);
+  }, [settlementsEnabled]);
 
   // Handle wallet connection
   const handleConnect = (address: string, role: string) => {
-    setWalletAddress(address);
-    setUserRole(role);
+    // AuthModal/legacy flow may set localStorage; refresh canonical auth state
+    refresh();
   };
 
   // Handle wallet disconnection
   const handleDisconnect = () => {
-    setWalletAddress(undefined);
-    setUserRole(undefined);
-    api.auth.logout();
+    logout();
   };
 
-  // Restore wallet from localStorage on mount
-  useEffect(() => {
-    const loadUserInfo = async () => {
-      try {
-        const userInfo = await api.auth.me();
-        if (userInfo.wallet_address) {
-          setWalletAddress(userInfo.wallet_address);
-          setUserRole(userInfo.role);
-        }
-      } catch (err) {
-        // Not logged in
-        api.auth.logout();
+  const loadClaims = async (selectFirst = false) => {
+    setLoadingClaims(true);
+    try {
+      const list = await api.claims.list();
+      setClaims(list);
+      if (selectFirst && list.length > 0) {
+        setSelectedClaimId(list[0].id);
       }
-    };
-    loadUserInfo();
+    } catch (e) {
+      console.error('Failed to load claims:', e);
+      setClaims([]);
+    } finally {
+      setLoadingClaims(false);
+    }
+  };
+
+  useEffect(() => {
+    loadClaims(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch claim when ID changes
-  useEffect(() => {
-    if (currentClaimId) {
-      fetchClaim(currentClaimId);
-    }
-  }, [currentClaimId]);
-
-  const fetchClaim = async (claimId: string) => {
-    setLoading(true);
-    try {
-      const claimData = await api.claims.get(claimId);
-      setClaim(claimData);
-    } catch (error) {
-      console.error('Failed to fetch claim:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleClaimCreated = (claimId: string) => {
-    setCurrentClaimId(claimId);
+    setShowNewClaim(false);
+    setSelectedClaimId(claimId);
+    setAutoEvaluateClaimId(claimId);
+    // Refresh list so the new claim appears in history
+    loadClaims(false);
   };
 
   const handleClaimUpdate = (updatedClaim: Claim) => {
-    setClaim(updatedClaim);
+    setClaims((prev) => prev.map((c) => (c.id === updatedClaim.id ? updatedClaim : c)));
+  };
+
+  const selectedClaim = useMemo(() => {
+    if (!selectedClaimId) return null;
+    return claims.find((c) => c.id === selectedClaimId) || null;
+  }, [claims, selectedClaimId]);
+
+  const statusLabel = (c: Claim) => {
+    switch (c.status) {
+      case 'SUBMITTED':
+        return 'Submitted';
+      case 'EVALUATING':
+        return 'In review';
+      case 'AWAITING_DATA':
+        return 'Needs info';
+      case 'NEEDS_REVIEW':
+        return 'Needs manual review';
+      case 'APPROVED':
+        return 'Approved';
+      case 'SETTLED':
+        return 'Settled';
+      case 'REJECTED':
+        return 'Rejected';
+      default:
+        return c.status;
+    }
   };
 
   return (
-    <div className="min-h-screen">
-      <Navbar 
-        walletAddress={walletAddress}
-        role={userRole}
-        onConnect={handleConnect}
-        onDisconnect={handleDisconnect}
-      />
-      
-      <main className="pt-24 pb-12 px-4">
-        <div className="max-w-4xl mx-auto">
-          {/* Header */}
-          <div className="text-center mb-10">
-            <h1 className="text-3xl font-bold text-white mb-2">Claimant Dashboard</h1>
-            <p className="text-slate-400">Submit claims and track their status</p>
-          </div>
+    <RequireRole role="claimant">
+      <div className="min-h-screen">
+        <EnableSettlementsModal
+          isOpen={showEnableSettlements}
+          onClose={() => setShowEnableSettlements(false)}
+          required={false}
+        />
+        <ChatAssistant claimId={selectedClaimId} />
+        <Navbar
+          onConnect={handleConnect}
+          onDisconnect={handleDisconnect}
+        />
 
-          {/* Wallet Warning */}
-          {!walletAddress && (
-            <Card className="mb-6 border-amber-500/30 bg-amber-500/10">
-              <div className="flex items-center gap-3">
-                <svg className="w-6 h-6 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-                <div>
-                  <p className="text-sm font-medium text-amber-400">Wallet not connected</p>
-                  <p className="text-xs text-amber-400/70">Connect your wallet to submit claims</p>
-                </div>
-              </div>
-            </Card>
-          )}
-
-          <div className="grid lg:grid-cols-2 gap-6">
-            {/* Submit Claim Form */}
-            <div>
-              <ClaimForm
-                walletAddress={walletAddress}
-                onClaimCreated={handleClaimCreated}
-              />
+        <main className="pt-24 pb-12 px-4">
+          <div className="max-w-6xl mx-auto">
+            {/* Header */}
+            <div className="text-center mb-10">
+              <h1 className="text-3xl font-bold text-white mb-2">Claims</h1>
+              <p className="text-slate-400">Submit a claim, track status, and respond to evidence requests.</p>
             </div>
 
-            {/* Claim Status */}
-            <div>
-              {loading ? (
-                <Card className="h-full flex items-center justify-center min-h-[300px]">
-                  <div className="text-center">
-                    <svg className="w-10 h-10 text-cyan-400 animate-spin mx-auto mb-4" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    <p className="text-slate-400">Loading claim...</p>
-                  </div>
-                </Card>
-              ) : claim ? (
-                <ClaimStatus 
-                  claim={claim}
-                  onUpdate={handleClaimUpdate}
-                />
-              ) : (
-                <Card className="h-full flex items-center justify-center min-h-[300px]">
-                  <div className="text-center">
-                    <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mx-auto mb-4">
-                      <svg className="w-8 h-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
+            <div className="grid lg:grid-cols-12 gap-6">
+              {/* Left: History */}
+              <div className="lg:col-span-4">
+                <Card className="mb-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-white">Your claims</p>
+                      <p className="text-xs text-slate-400">{claims.length} total</p>
                     </div>
-                    <p className="text-slate-400 mb-2">No claim selected</p>
-                    <p className="text-sm text-slate-500">
-                      Submit a claim to see its status here
-                    </p>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setShowNewClaim(true);
+                        setSelectedClaimId(null);
+                      }}
+                    >
+                      New claim
+                    </Button>
                   </div>
                 </Card>
-              )}
+
+                {loadingClaims ? (
+                  <Card className="py-8 text-center">
+                    <p className="text-slate-400 text-sm">Loading claims…</p>
+                  </Card>
+                ) : claims.length === 0 ? (
+                  <Card className="py-10 text-center">
+                    <p className="text-slate-300 font-medium mb-2">No claims yet</p>
+                    <p className="text-sm text-slate-500 mb-4">Submit a claim to start evaluation.</p>
+                    <Button
+                      onClick={() => {
+                        setShowNewClaim(true);
+                        setSelectedClaimId(null);
+                      }}
+                    >
+                      Submit a claim
+                    </Button>
+                  </Card>
+                ) : (
+                  <div className="space-y-2">
+                    {claims.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedClaimId(c.id);
+                          setShowNewClaim(false);
+                        }}
+                        className={`w-full text-left p-3 rounded-xl border transition-colors ${
+                          selectedClaimId === c.id
+                            ? 'border-cyan-500/40 bg-cyan-500/10'
+                            : 'border-white/10 bg-white/5 hover:bg-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-white truncate">#{c.id.slice(0, 8)}</p>
+                            <p className="text-xs text-slate-400 truncate">
+                              {c.description || 'No description'}
+                            </p>
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <span className="text-xs text-slate-300">{statusLabel(c)}</span>
+                            <span className="text-xs text-slate-500">
+                              ${Math.round(c.claim_amount).toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Right: Detail */}
+              <div className="lg:col-span-8">
+                {showNewClaim ? (
+                  <ClaimForm walletAddress={walletAddress ?? undefined} onClaimCreated={handleClaimCreated} />
+                ) : selectedClaim ? (
+                  <ClaimStatus
+                    claim={selectedClaim}
+                    onUpdate={(updated) => {
+                      handleClaimUpdate(updated);
+                      if (autoEvaluateClaimId === updated.id && updated.status === 'EVALUATING') {
+                        setAutoEvaluateClaimId(null);
+                      }
+                    }}
+                    autoStartEvaluation={selectedClaim.id === autoEvaluateClaimId}
+                  />
+                ) : (
+                  <Card className="h-full flex items-center justify-center min-h-[300px]">
+                    <div className="text-center">
+                      <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mx-auto mb-4">
+                        <svg className="w-8 h-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </div>
+                      <p className="text-slate-400 mb-2">Select a claim</p>
+                      <p className="text-sm text-slate-500">Choose a claim on the left or start a new one.</p>
+                    </div>
+                  </Card>
+                )}
+              </div>
             </div>
           </div>
-
-          {/* Help Section */}
-          <Card className="mt-8">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-lg bg-cyan-500/20 flex items-center justify-center flex-shrink-0">
-                <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-white mb-2">How it works</h3>
-                <ol className="space-y-2 text-sm text-slate-400">
-                  <li className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-full bg-blue-500/20 text-blue-400 text-xs flex items-center justify-center flex-shrink-0 mt-0.5">1</span>
-                    <span>Submit your claim with the amount and evidence files</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 text-xs flex items-center justify-center flex-shrink-0 mt-0.5">2</span>
-                    <span>Trigger AI evaluation ($0.35 USDC in x402 micropayments)</span>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 text-xs flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
-                    <span>If approved, the insurer settles your claim in USDC on Arc</span>
-                  </li>
-                </ol>
-              </div>
-            </div>
-          </Card>
-        </div>
-      </main>
-    </div>
+        </main>
+      </div>
+    </RequireRole>
   );
 }
