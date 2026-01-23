@@ -166,8 +166,12 @@ class ADKOrchestrator:
                         "auto_settled": result.get("auto_settled", False)
                     })
                 
-                # Generate summary
+                # Generate summary - ensure we use the correct claim object
+                # Double-check claim ID matches to prevent data mismatch
+                assert claim.id == claim_id, f"Claim ID mismatch: expected {claim_id}, got {claim.id}"
                 summary = await self._generate_summary_from_result(claim, result)
+                # Sanitize summary to remove any technical details that might have leaked through
+                summary = self._sanitize_summary(summary, claim.id)
                 
                 # Print final flow summary for autonomous mode
                 print(f"\n📋 [ORCHESTRATOR] Final Flow Summary:")
@@ -542,22 +546,41 @@ class ADKOrchestrator:
             client = genai.Client(api_key=api_key)
             model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash")
             
-            prompt = f"""Generate a comprehensive summary for this insurance claim evaluation:
+            # Map technical decision codes to user-friendly terms
+            decision_map = {
+                'AUTO_APPROVED': 'Approved',
+                'APPROVED_WITH_REVIEW': 'Approved (pending review)',
+                'NEEDS_REVIEW': 'Needs review',
+                'NEEDS_MORE_DATA': 'Needs more information',
+                'INSUFFICIENT_DATA': 'Insufficient information',
+                'FRAUD_DETECTED': 'Rejected',
+                'REJECTED': 'Rejected'
+            }
+            
+            prompt = f"""Generate a clear, user-friendly summary for this insurance claim evaluation.
 
-Claim ID: {claim.id}
-Claim Amount: ${float(claim.claim_amount):,.2f}
-Claimant: {claim.claimant_address}
+IMPORTANT: Do NOT include technical details like:
+- Full claim IDs or UUIDs
+- Wallet addresses or blockchain addresses
+- Internal status codes (like INSUFFICIENT_DATA, EVALUATING, etc.)
+- Technical metrics (confidence percentages, thresholds, fraud risk scores)
+- Internal system details (tool calls, agent names, contradictions)
+
+Instead, write in plain language that a claimant or insurer can understand.
+
+Claim Information:
+- Claim Amount: ${float(claim.claim_amount):,.2f}
 
 Agent Analysis Results:
 {self._format_agent_results(agent_results)}
 
-Reasoning:
-- Confidence: {reasoning_result.get('final_confidence', 0):.2%}
-- Contradictions: {len(reasoning_result.get('contradictions', []))}
-- Fraud Risk: {reasoning_result.get('fraud_risk', 0):.2f}
+Provide a clear, professional summary in plain language. Focus on:
+- What was evaluated
+- What decision was made
+- What (if anything) is needed next
+- Any important findings
 
-Provide a clear, professional summary suitable for automatic approval or manual review.
-Include key findings from each agent and the overall assessment."""
+Write as if explaining to a non-technical user."""
             
             # Use async API
             aio_client = client.aio
@@ -585,35 +608,115 @@ Include key findings from each agent and the overall assessment."""
     ) -> str:
         """Generate template-based summary when AI is not available."""
         summary_parts = [
-            f"Claim Evaluation Summary for Claim {claim.id}",
-            f"Claim Amount: ${float(claim.claim_amount):,.2f}",
+            f"**Claim Evaluation Summary**",
             "",
-            "Agent Analysis:"
+            f"**Claim Amount:** ${float(claim.claim_amount):,.2f}",
+            "",
+            "**Evaluation Results:**"
         ]
         
         if "document" in agent_results:
             doc_result = agent_results["document"]
-            summary_parts.append(f"- Document: {'Valid' if doc_result.get('valid') else 'Invalid'}")
+            status = 'Verified' if doc_result.get('valid') else 'Could not verify'
+            summary_parts.append(f"- Document: {status}")
             if doc_result.get("extracted_data"):
                 data = doc_result["extracted_data"]
-                summary_parts.append(f"  Amount: ${data.get('amount', 0):,.2f}")
+                if data.get('amount'):
+                    summary_parts.append(f"  Amount found: ${data.get('amount', 0):,.2f}")
         
         if "image" in agent_results:
             img_result = agent_results["image"]
-            summary_parts.append(f"- Image: {'Valid' if img_result.get('valid') else 'Invalid'}")
+            status = 'Verified' if img_result.get('valid') else 'Could not verify'
+            summary_parts.append(f"- Image: {status}")
             if img_result.get("damage_assessment"):
                 assessment = img_result["damage_assessment"]
-                summary_parts.append(f"  Damage: {assessment.get('damage_type', 'unknown')}")
+                damage_type = assessment.get('damage_type', 'unknown')
+                summary_parts.append(f"  Damage type: {damage_type.replace('_', ' ').title()}")
         
         if "fraud" in agent_results:
             fraud_result = agent_results["fraud"]
-            summary_parts.append(f"- Fraud Risk: {fraud_result.get('risk_level', 'UNKNOWN')}")
+            risk_level = fraud_result.get('risk_level', 'UNKNOWN')
+            # Convert technical risk levels to user-friendly terms
+            risk_map = {
+                'LOW': 'Low risk',
+                'MEDIUM': 'Medium risk',
+                'HIGH': 'High risk',
+                'UNKNOWN': 'Unable to assess'
+            }
+            user_friendly_risk = risk_map.get(risk_level, risk_level)
+            summary_parts.append(f"- Fraud assessment: {user_friendly_risk}")
         
         summary_parts.append("")
-        summary_parts.append(f"Overall Confidence: {reasoning_result.get('final_confidence', 0):.2%}")
-        summary_parts.append(f"Decision: {reasoning_result.get('reasoning', 'Pending review')}")
+        reasoning = reasoning_result.get('reasoning', 'Pending review')
+        if not reasoning or reasoning == 'Pending review':
+            reasoning = 'Evaluation completed. Review required.'
+        summary_parts.append(f"**Assessment:** {reasoning}")
         
-        return "\n".join(summary_parts)
+        summary = "\n".join(summary_parts)
+        return self._sanitize_summary(summary, claim.id)
+    
+    def _sanitize_summary(self, summary: str, correct_claim_id: str) -> str:
+        """Remove technical details and ensure correct claim ID is used."""
+        if not summary:
+            return summary
+        
+        import re
+        
+        # Remove full UUIDs (but keep short claim IDs like #a9297b57)
+        # Pattern: full UUIDs like a9297b57-6f79-4bb9-9583-cd708361c2d0
+        uuid_pattern = r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+        summary = re.sub(uuid_pattern, '', summary, flags=re.IGNORECASE)
+        
+        # Remove full wallet addresses (0x followed by 40 hex characters)
+        wallet_pattern = r'\b0x[0-9a-f]{40}\b'
+        summary = re.sub(wallet_pattern, '', summary, flags=re.IGNORECASE)
+        
+        # Remove technical status codes
+        technical_statuses = [
+            'INSUFFICIENT_DATA', 'EVALUATING', 'AWAITING_DATA', 
+            'NEEDS_MORE_DATA', 'AUTO_APPROVED', 'APPROVED_WITH_REVIEW',
+            'FRAUD_DETECTED', 'NEEDS_REVIEW'
+        ]
+        for status in technical_statuses:
+            summary = summary.replace(status, '')
+            summary = summary.replace(status.replace('_', ' '), '')
+        
+        # Remove confidence percentages and thresholds
+        summary = re.sub(r'\b\d+\.\d+%\s*(?:confidence|threshold|below|above)', '', summary, flags=re.IGNORECASE)
+        summary = re.sub(r'confidence\s*level\s*[:\-]?\s*\d+\.?\d*%?', '', summary, flags=re.IGNORECASE)
+        summary = re.sub(r'auto-approval\s*threshold\s*[:\-]?\s*\(?\d+\.?\d*%?\)?', '', summary, flags=re.IGNORECASE)
+        
+        # Remove technical phrases
+        technical_phrases = [
+            'No tools were called',
+            'tools were called',
+            'specific data was requested',
+            'tool calls',
+            'agent results',
+            'tool_results'
+        ]
+        for phrase in technical_phrases:
+            summary = summary.replace(phrase, '')
+            summary = summary.replace(phrase.title(), '')
+        
+        # Clean up extra whitespace
+        summary = re.sub(r'\s+', ' ', summary)
+        summary = re.sub(r'\n\s*\n\s*\n+', '\n\n', summary)
+        summary = summary.strip()
+        
+        # Ensure we don't have wrong claim ID in summary
+        # Extract short claim ID (first 8 chars)
+        short_claim_id = correct_claim_id[:8] if len(correct_claim_id) >= 8 else correct_claim_id
+        # If summary mentions a different claim ID, remove it
+        claim_id_pattern = r'#?[0-9a-f]{8}'
+        found_ids = re.findall(claim_id_pattern, summary, flags=re.IGNORECASE)
+        for found_id in found_ids:
+            clean_id = found_id.replace('#', '').lower()
+            if clean_id != short_claim_id.lower():
+                # Remove references to wrong claim ID
+                summary = re.sub(rf'\b{re.escape(found_id)}\b', '', summary, flags=re.IGNORECASE)
+        
+        return summary
     
     async def _auto_settle(
         self,
@@ -715,21 +818,53 @@ Include key findings from each agent and the overall assessment."""
             client = genai.Client(api_key=api_key)
             model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash")
             
-            prompt = f"""Generate a comprehensive summary for this insurance claim evaluation:
+            # Map technical decision codes to user-friendly terms
+            decision_map = {
+                'AUTO_APPROVED': 'Approved',
+                'APPROVED_WITH_REVIEW': 'Approved (pending review)',
+                'NEEDS_REVIEW': 'Needs review',
+                'NEEDS_MORE_DATA': 'Needs more information',
+                'INSUFFICIENT_DATA': 'Insufficient information',
+                'FRAUD_DETECTED': 'Rejected',
+                'REJECTED': 'Rejected'
+            }
+            user_friendly_decision = decision_map.get(result.get('decision', 'UNKNOWN'), 'Under review')
+            
+            # Format requested data in user-friendly way
+            requested_data = result.get('requested_data', [])
+            if requested_data:
+                data_needed = ', '.join([d.replace('_', ' ').title() for d in requested_data])
+            else:
+                data_needed = 'None'
+            
+            prompt = f"""Generate a clear, user-friendly summary for this insurance claim evaluation.
 
-Claim ID: {claim.id}
-Claim Amount: ${float(claim.claim_amount):,.2f}
-Claimant: {claim.claimant_address}
+CRITICAL REQUIREMENTS:
+1. Use ONLY the claim information provided below - do NOT reference other claims or claim IDs
+2. Do NOT include technical details like:
+   - Full claim IDs or UUIDs (like a9297b57-6f79-4bb9-9583-cd708361c2d0)
+   - Wallet addresses or blockchain addresses (like 0x2fad2facda29bcfbe3b1ced92b289dfcc988353c)
+   - Internal status codes (like INSUFFICIENT_DATA, EVALUATING, etc.)
+   - Technical metrics (confidence percentages, thresholds like 95.00%)
+   - Internal system details (tool calls, agent names, "No tools were called")
 
-Decision: {result.get('decision', 'UNKNOWN')}
-Confidence: {result.get('confidence', 0):.2%}
-Reasoning: {result.get('reasoning', '')}
+3. Write in plain language that a claimant or insurer can understand
 
-Tool Results: {len(result.get('tool_results', {}))} tool(s) called
-Requested Data: {', '.join(result.get('requested_data', [])) or 'None'}
-Human Review Required: {result.get('human_review_required', False)}
+Claim Information (USE THIS EXACT INFORMATION):
+- Claim Amount: ${float(claim.claim_amount):,.2f}
+- Status: {user_friendly_decision}
+- Additional Information Needed: {data_needed}
 
-Provide a clear, professional summary suitable for automatic approval or manual review."""
+Evaluation Details:
+{result.get('reasoning', 'Evaluation completed.')}
+
+Provide a clear, professional summary in plain language. Focus on:
+- What was evaluated
+- What decision was made
+- What (if anything) is needed next
+- Any important findings
+
+Write as if explaining to a non-technical user. Do NOT mention claim IDs, wallet addresses, or technical system details."""
             
             aio_client = client.aio
             response = await aio_client.models.generate_content(
@@ -738,14 +873,18 @@ Provide a clear, professional summary suitable for automatic approval or manual 
             )
             
             if hasattr(response, 'text'):
-                return response.text
+                summary = response.text
             elif hasattr(response, 'candidates') and response.candidates:
-                return response.candidates[0].content.parts[0].text
+                summary = response.candidates[0].content.parts[0].text
             else:
-                return str(response)
+                summary = str(response)
+            
+            # Sanitize summary to remove technical details
+            return self._sanitize_summary(summary, claim.id)
         except Exception as e:
             print(f"Error generating AI summary: {e}")
-            return self._generate_template_summary_from_result(claim, result)
+            template_summary = self._generate_template_summary_from_result(claim, result)
+            return self._sanitize_summary(template_summary, claim.id)
     
     def _generate_template_summary_from_result(
         self,
@@ -753,29 +892,62 @@ Provide a clear, professional summary suitable for automatic approval or manual 
         result: Dict[str, Any]
     ) -> str:
         """Generate template-based summary from orchestrator agent result."""
+        # Map technical decision codes to user-friendly terms
+        decision_map = {
+            'AUTO_APPROVED': 'Approved',
+            'APPROVED_WITH_REVIEW': 'Approved (pending review)',
+            'NEEDS_REVIEW': 'Needs review',
+            'NEEDS_MORE_DATA': 'Needs more information',
+            'INSUFFICIENT_DATA': 'Insufficient information',
+            'FRAUD_DETECTED': 'Rejected',
+            'REJECTED': 'Rejected'
+        }
+        decision = result.get('decision', 'UNKNOWN')
+        user_friendly_decision = decision_map.get(decision, 'Under review')
+        
+        # Get user-friendly reasoning
+        reasoning = result.get('reasoning', 'No reasoning provided')
+        if not reasoning or reasoning == 'No reasoning provided':
+            if decision == 'INSUFFICIENT_DATA':
+                reasoning = 'The claim requires additional documentation to proceed with evaluation.'
+            elif decision == 'NEEDS_MORE_DATA':
+                reasoning = 'Additional information is needed to complete the evaluation.'
+            elif decision == 'NEEDS_REVIEW':
+                reasoning = 'This claim requires manual review by an insurer.'
+            elif decision in ['AUTO_APPROVED', 'APPROVED_WITH_REVIEW']:
+                reasoning = 'The claim has been approved based on the evaluation.'
+            elif decision in ['FRAUD_DETECTED', 'REJECTED']:
+                reasoning = 'The claim has been rejected based on the evaluation.'
+        
         summary_parts = [
-            f"Claim Evaluation Summary for Claim {claim.id}",
-            f"Claim Amount: ${float(claim.claim_amount):,.2f}",
+            f"**Claim Evaluation Summary**",
             "",
-            f"Decision: {result.get('decision', 'UNKNOWN')}",
-            f"Confidence: {result.get('confidence', 0):.2%}",
+            f"**Status:** {user_friendly_decision}",
             "",
-            f"Reasoning: {result.get('reasoning', 'No reasoning provided')}",
+            f"**Evaluation:** {reasoning}",
             ""
         ]
         
-        if result.get('requested_data'):
-            summary_parts.append(f"Requested Data: {', '.join(result['requested_data'])}")
+        # Add requested data in user-friendly format
+        requested_data = result.get('requested_data', [])
+        if requested_data:
+            data_needed = ', '.join([d.replace('_', ' ').title() for d in requested_data])
+            summary_parts.append(f"**Additional Information Needed:** {data_needed}")
+            summary_parts.append("")
         
+        # Add human review note if needed
         if result.get('human_review_required'):
-            summary_parts.append("Human Review Required: Yes")
+            summary_parts.append("**Note:** This claim requires manual review by an insurer.")
             if result.get('review_reasons'):
-                summary_parts.append(f"Review Reasons: {', '.join(result['review_reasons'])}")
+                reasons = result.get('review_reasons', [])
+                if isinstance(reasons, list) and len(reasons) > 0:
+                    summary_parts.append("")
+                    summary_parts.append("**Review Reasons:**")
+                    for reason in reasons:
+                        summary_parts.append(f"- {reason}")
         
-        if result.get('auto_settled'):
-            summary_parts.append(f"Auto-Settled: Yes (TX: {result.get('tx_hash', 'N/A')})")
-        
-        return "\n".join(summary_parts)
+        summary = "\n".join(summary_parts)
+        return self._sanitize_summary(summary, claim.id)
 
 
 # Singleton instance
