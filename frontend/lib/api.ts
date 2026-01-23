@@ -63,7 +63,10 @@ async function fetchAPI<T>(
     } catch {
       // If response is not JSON, use status text
     }
-    throw new Error(errorDetail);
+    const error = new Error(errorDetail) as any;
+    error.status = response.status;
+    error.statusCode = response.status;
+    throw error;
   }
 
   return response.json();
@@ -327,6 +330,55 @@ export const api = {
         body: JSON.stringify({}),
       });
     },
+
+    circleConnectStatus: async (): Promise<{
+      user_id: string;
+      user_email: string;
+      circle_wallets: Array<any>;
+      db_wallet: {
+        wallet_address: string;
+        circle_wallet_id: string;
+        wallet_set_id?: string;
+      } | null;
+      has_circle_wallet: boolean;
+      has_db_wallet: boolean;
+      mismatch?: boolean;
+      mismatch_details?: string;
+      error?: string;
+    }> => {
+      return fetchAPI('/auth/circle/connect/status', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+
+    // Admin auto-login
+    adminLogin: async (): Promise<LoginResponse> => {
+      try {
+        const response = await fetchAPI<LoginResponse>('/auth/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        
+        // Store token
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('auth_token', response.access_token);
+          localStorage.setItem('user_id', response.user_id);
+          localStorage.setItem('user_role', response.role);
+        }
+        
+        return response;
+      } catch (error: any) {
+        // Clear any partial token storage on error
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('auth_token');
+          localStorage.removeItem('user_id');
+          localStorage.removeItem('user_role');
+        }
+        throw error; // Re-throw to let caller handle
+      }
+    },
   },
 
   // Verifiers (x402)
@@ -376,9 +428,28 @@ export const api = {
       });
     },
   },
+
+  // Admin endpoints
+  admin: {
+    getFees: async (): Promise<{
+      wallet_address: string | null;
+      current_balance: number | null;
+      total_spent: number;
+      total_evaluations: number;
+      average_cost_per_evaluation: number;
+      fee_breakdown: Array<{
+        claim_id: string;
+        total_cost: number;
+        tool_costs: Record<string, number>;
+        timestamp: string;
+      }>;
+    }> => {
+      return fetchAPI('/admin/fees');
+    },
+  },
 };
 
 // Export individual functions for convenience
-export const { health, info, claims, agent, blockchain, verifier, auth } = api;
+export const { health, info, claims, agent, blockchain, verifier, auth, admin } = api;
 
 export default api;
