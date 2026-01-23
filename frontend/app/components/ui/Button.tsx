@@ -16,7 +16,7 @@ const variantStyles: Record<ButtonVariant, string> = {
   primary: 'btn-primary',
   secondary: 'btn-secondary',
   success: 'btn-success',
-  ghost: 'bg-transparent hover:bg-white/5 text-white px-4 py-2 rounded-lg transition-colors',
+  ghost: 'bg-transparent hover:bg-surface text-text-primary px-4 py-2 rounded-lg transition-colors',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
