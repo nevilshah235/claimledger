@@ -14,7 +14,8 @@ Legacy endpoints (kept for backward compatibility):
 """
 
 import uuid
-from typing import Optional
+from typing import Optional, Dict, Any
+from datetime import datetime
 import httpx
 import os
 from fastapi import APIRouter, HTTPException, Depends, Header, status
@@ -258,14 +259,14 @@ async def login(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
+            detail="No account found with this email"
         )
     
     # Verify password
     if not verify_password(request.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password"
+            detail="Incorrect password"
         )
     
     # Get wallet address if exists
@@ -284,6 +285,156 @@ async def login(
         email=user.email,
         role=user.role,
         wallet_address=wallet_address,
+        access_token=access_token
+    )
+
+
+@router.post("/admin/login", response_model=LoginResponse)
+async def admin_auto_login(
+    db: Session = Depends(get_db)
+):
+    """
+    Auto-login as admin.
+    
+    This endpoint allows quick access to the admin/insurer interface.
+    It works in two modes:
+    1. If ADMIN_WALLET_ADDRESS is set: Uses that specific wallet address
+    2. If not set: Uses the first existing insurer user with a wallet from the database
+    
+    Returns:
+    - user_id: Admin user identifier
+    - email: Admin email
+    - role: "insurer"
+    - wallet_address: Admin wallet address
+    - access_token: JWT token for authentication
+    """
+    admin_wallet_address = os.getenv("ADMIN_WALLET_ADDRESS")
+    
+    # If ADMIN_WALLET_ADDRESS is set, use it
+    if admin_wallet_address:
+        # Find or create admin user with this wallet address
+        # Look for existing user with this wallet
+        user_wallet = db.query(UserWallet).filter(
+            UserWallet.wallet_address == admin_wallet_address
+        ).first()
+        
+        if user_wallet:
+            # User exists, get the user
+            user = db.query(User).filter(User.id == user_wallet.user_id).first()
+            if user and user.role == "insurer":
+                # Create JWT token
+                access_token = create_access_token(
+                    data={"sub": user.id, "email": user.email, "role": user.role}
+                )
+                return LoginResponse(
+                    user_id=user.id,
+                    email=user.email,
+                    role=user.role,
+                    wallet_address=admin_wallet_address,
+                    access_token=access_token
+                )
+        
+        # Create new admin user if doesn't exist
+        # Generate a placeholder email based on wallet address
+        admin_email = f"admin_{admin_wallet_address[:8]}@admin.local"
+        
+        # Check if user with this email exists
+        existing_user = db.query(User).filter(User.email == admin_email).first()
+        if existing_user:
+            # Update wallet if needed
+            if not user_wallet:
+                user_wallet = UserWallet(
+                    id=str(uuid.uuid4()),
+                    user_id=existing_user.id,
+                    wallet_address=admin_wallet_address,
+                    circle_wallet_id="admin_wallet",  # Placeholder for admin wallet
+                    created_at=datetime.utcnow()
+                )
+                db.add(user_wallet)
+                db.commit()
+            
+            access_token = create_access_token(
+                data={"sub": existing_user.id, "email": existing_user.email, "role": existing_user.role}
+            )
+            return LoginResponse(
+                user_id=existing_user.id,
+                email=existing_user.email,
+                role=existing_user.role,
+                wallet_address=admin_wallet_address,
+                access_token=access_token
+            )
+        
+        # Create new admin user
+        import secrets
+        # Generate a random password (not used for auto-login, but required for user model)
+        random_password = secrets.token_urlsafe(32)
+        password_hash = get_password_hash(random_password)
+        
+        user = User(
+            id=str(uuid.uuid4()),
+            email=admin_email,
+            password_hash=password_hash,
+            role="insurer",
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+        db.add(user)
+        db.flush()  # Get user.id
+        
+        # Create wallet entry
+        user_wallet = UserWallet(
+            id=str(uuid.uuid4()),
+            user_id=user.id,
+            wallet_address=admin_wallet_address,
+            circle_wallet_id="admin_wallet",  # Placeholder for admin wallet
+            created_at=datetime.utcnow()
+        )
+        db.add(user_wallet)
+        db.commit()
+        db.refresh(user)
+        
+        # Create JWT token
+        access_token = create_access_token(
+            data={"sub": user.id, "email": user.email, "role": user.role}
+        )
+        
+        return LoginResponse(
+            user_id=user.id,
+            email=user.email,
+            role=user.role,
+            wallet_address=admin_wallet_address,
+            access_token=access_token
+        )
+    
+    # ADMIN_WALLET_ADDRESS not set - try to use existing insurer user
+    # Find first insurer user with a wallet
+    insurer_user = db.query(User).filter(User.role == "insurer").first()
+    
+    if not insurer_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No admin account found. Please either: (1) Set ADMIN_WALLET_ADDRESS environment variable, or (2) Create an insurer account first via registration."
+        )
+    
+    # Get wallet for this user
+    user_wallet = db.query(UserWallet).filter(UserWallet.user_id == insurer_user.id).first()
+    
+    if not user_wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Admin user '{insurer_user.email}' found but has no wallet address. Please complete wallet setup first, or set ADMIN_WALLET_ADDRESS environment variable."
+        )
+    
+    # Use existing admin user
+    access_token = create_access_token(
+        data={"sub": insurer_user.id, "email": insurer_user.email, "role": insurer_user.role}
+    )
+    
+    return LoginResponse(
+        user_id=insurer_user.id,
+        email=insurer_user.email,
+        role=insurer_user.role,
+        wallet_address=user_wallet.wallet_address,
         access_token=access_token
     )
 
@@ -528,7 +679,104 @@ async def circle_connect_init(
             blockchains=["ARC-TESTNET"]
         )
         challenge_id = init_data.get("challengeId") or init_data.get("challenge_id")
+        already_initialized = init_data.get("alreadyInitialized", False)
+        
+        import logging
+        logging.info(f"Circle initialize_user response for user {current_user.id} ({current_user.email}): challenge_id={challenge_id}, already_initialized={already_initialized}")
+        logging.info(f"Full init_data: {init_data}")
 
+        # If we have a challenge_id, proceed with wallet creation (even if user is already initialized)
+        # This allows users who were initialized but never completed wallet setup to create a wallet
+        if challenge_id:
+            logging.info(f"Challenge ID available for user {current_user.id}, proceeding with wallet creation flow")
+            return CircleConnectInitResponse(
+                available=True,
+                app_id=circle_service.app_id or "",
+                user_token=user_token,
+                encryption_key=encryption_key,
+                challenge_id=challenge_id,
+            )
+
+        # If no challenge_id and user is already initialized, check if they have a wallet
+        if already_initialized:
+            logging.info(f"User {current_user.id} ({current_user.email}) is already initialized but no challenge_id. Checking for existing wallet...")
+            # User is already initialized - check if they have a wallet in our DB
+            user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+            
+            if user_wallet and user_wallet.wallet_address:
+                # User already has a wallet - return success without challenge
+                # Frontend will need to handle this case (skip SDK execute)
+                return CircleConnectInitResponse(
+                    available=True,
+                    app_id=circle_service.app_id or "",
+                    user_token=user_token,
+                    encryption_key=encryption_key,
+                    challenge_id=None,  # No challenge needed - user already has wallet
+                    message="User already initialized with wallet. Wallet setup complete.",
+                )
+            
+            # User is initialized but no wallet in DB - try to fetch from Circle
+            # For User-Controlled wallets, use list_wallets with user_token (not get_user_wallets)
+            try:
+                logging.info(f"Attempting to fetch wallets from Circle for user {current_user.id} using user token (User-Controlled wallets endpoint)")
+                wallets = await circle_service.list_wallets(user_token)
+                logging.info(f"Found {len(wallets)} wallet(s) using user token endpoint")
+                
+                if wallets:
+                    logging.info(f"Successfully found {len(wallets)} wallet(s) in Circle for user {current_user.id}")
+                    for i, w in enumerate(wallets):
+                        logging.info(f"  Wallet {i+1}: {w}")
+                    # Found wallet in Circle - save it to DB
+                    wallet = wallets[0]
+                    wallet_id = wallet.get("walletId") or wallet.get("id") or wallet.get("wallet_id")
+                    address = wallet.get("address")
+                    
+                    if wallet_id and address:
+                        # Save wallet to DB
+                        if not user_wallet:
+                            user_wallet = UserWallet(
+                                user_id=current_user.id,
+                                wallet_address=address,
+                                circle_wallet_id=wallet_id,
+                                wallet_set_id=wallet.get("walletSetId") or wallet.get("wallet_set_id"),
+                            )
+                            db.add(user_wallet)
+                        else:
+                            user_wallet.wallet_address = address
+                            user_wallet.circle_wallet_id = wallet_id
+                            user_wallet.wallet_set_id = wallet.get("walletSetId") or wallet.get("wallet_set_id") or user_wallet.wallet_set_id
+                        db.commit()
+                        
+                        # Return success - wallet already exists
+                        return CircleConnectInitResponse(
+                            available=True,
+                            app_id=circle_service.app_id or "",
+                            user_token=user_token,
+                            encryption_key=encryption_key,
+                            challenge_id=None,  # No challenge needed
+                            message="User already initialized. Wallet retrieved and saved.",
+                        )
+            except Exception as e:
+                import logging
+                logging.error(f"Exception while fetching wallets from Circle for user {current_user.id}: {e}", exc_info=True)
+                logging.error(f"Exception type: {type(e).__name__}")
+                if hasattr(e, 'response'):
+                    logging.error(f"HTTP response status: {e.response.status_code if hasattr(e.response, 'status_code') else 'N/A'}")
+                    logging.error(f"HTTP response text: {getattr(e.response, 'text', 'N/A')}")
+            
+            # User is initialized but no wallet found - they need to complete setup
+            # Log user_id for debugging in Circle portal
+            logging.error(f"User {current_user.id} ({current_user.email}) is initialized in Circle but no wallet found.")
+            logging.error(f"Please check Circle portal for user_id: {current_user.id}")
+            logging.error(f"Circle user should exist but wallet creation may not have completed.")
+            logging.error(f"Full init_data from Circle: {init_data}")
+            
+            return CircleConnectInitResponse(
+                available=False,
+                message=f"User is initialized but no wallet found. Please complete wallet setup via Circle Connect. (User ID: {current_user.id} - check Circle portal)",
+            )
+        
+        # If no challenge_id and not already initialized, it's an error
         if not challenge_id:
             return CircleConnectInitResponse(
                 available=False,
@@ -607,14 +855,39 @@ async def circle_connect_complete(
     """
     After the Web SDK challenge succeeds, fetch the user's Circle wallet and persist mapping.
     """
+    import logging
+    logging.info(f"Checking for wallet for user {current_user.id} ({current_user.email})")
+    
     try:
-        wallets = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
-        if not wallets:
-            # fallback: fetch without chain filter
-            wallets = await circle_service.get_user_wallets(current_user.id, blockchains=None)
+        # For User-Controlled wallets, we need to use list_wallets with user_token
+        # First, create a user token
+        logging.info(f"Creating user token for user {current_user.id} to query wallets")
+        token_data = await circle_service.create_user_token(current_user.id)
+        user_token = token_data.get("userToken")
+        
+        if not user_token:
+            logging.error(f"Failed to create user token for user {current_user.id}")
+            return CircleConnectCompleteResponse(
+                success=False,
+                wallet_address=None,
+                circle_wallet_id=None
+            )
+        
+        # Use list_wallets with user token (correct endpoint for User-Controlled wallets)
+        logging.info(f"Querying Circle API for wallets using user token (User-Controlled wallets endpoint)")
+        wallets = await circle_service.list_wallets(user_token)
+        logging.info(f"Found {len(wallets)} wallet(s) using user token endpoint")
 
         if not wallets:
-            # No wallets found - this is expected if user hasn't completed PIN challenge yet
+            # No wallets found - log this for debugging
+            logging.warning(f"No wallets found in Circle API for user {current_user.id} ({current_user.email})")
+            logging.warning(f"This could mean: (1) Wallet creation is still in progress, (2) User hasn't completed PIN challenge, or (3) Wallet was not created")
+            
+            # Check if user has a wallet in our DB (might be stale)
+            user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+            if user_wallet:
+                logging.warning(f"User has wallet in DB but not in Circle: wallet_id={user_wallet.circle_wallet_id}, address={user_wallet.wallet_address}")
+            
             return CircleConnectCompleteResponse(
                 success=False,
                 wallet_address=None,
@@ -624,8 +897,12 @@ async def circle_connect_complete(
         wallet = wallets[0]
         wallet_id = wallet.get("walletId") or wallet.get("id") or wallet.get("wallet_id")
         address = wallet.get("address")
+        
+        logging.info(f"Found wallet in Circle: wallet_id={wallet_id}, address={address}")
+        logging.info(f"Full wallet data: {wallet}")
 
         if not wallet_id or not address:
+            logging.error(f"Malformed wallet payload from Circle: {wallet}")
             raise HTTPException(status_code=500, detail="Malformed Circle wallet payload")
 
         # Upsert user_wallet mapping
@@ -662,6 +939,101 @@ async def circle_connect_complete(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to complete Circle connect: {str(e)}")
+
+
+@router.get("/circle/connect/status", response_model=Dict[str, Any])
+async def circle_connect_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    circle_service: CircleWalletsService = Depends(get_circle_service),
+):
+    """
+    Diagnostic endpoint to check wallet status in Circle and local database.
+    Useful for debugging wallet availability issues.
+    """
+    import logging
+    
+    status = {
+        "user_id": current_user.id,
+        "user_email": current_user.email,
+        "circle_wallets": [],
+        "db_wallet": None,
+        "has_circle_wallet": False,
+        "has_db_wallet": False,
+    }
+    
+    try:
+        # Check Circle API for wallets using User-Controlled wallets endpoint
+        logging.info(f"Checking Circle API for wallets for user {current_user.id}")
+        
+        # Create user token for User-Controlled wallets endpoint
+        token_data = await circle_service.create_user_token(current_user.id)
+        user_token = token_data.get("userToken")
+        
+        if user_token:
+            # Use list_wallets (correct endpoint for User-Controlled wallets)
+            wallets_all = await circle_service.list_wallets(user_token)
+            wallets_arc = [w for w in wallets_all if w.get("blockchain") in ["ARC-TESTNET", "ARC", "ARBITRUM"]]
+        else:
+            logging.warning(f"Could not create user token for status check, falling back to get_user_wallets")
+            wallets_arc = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
+            wallets_all = await circle_service.get_user_wallets(current_user.id, blockchains=None)
+        
+        # Use all wallets (from both queries, deduplicated)
+        all_wallets = wallets_arc if wallets_arc else wallets_all
+        if wallets_arc and wallets_all and wallets_arc != wallets_all:
+            # Merge if different
+            all_wallets = wallets_arc + [w for w in wallets_all if w not in wallets_arc]
+        
+        status["circle_wallets"] = all_wallets
+        status["has_circle_wallet"] = len(all_wallets) > 0
+        
+        if all_wallets:
+            logging.info(f"Found {len(all_wallets)} wallet(s) in Circle for user {current_user.id}")
+            for wallet in all_wallets:
+                wallet_id = wallet.get("walletId") or wallet.get("id") or wallet.get("wallet_id")
+                address = wallet.get("address")
+                logging.info(f"  - Wallet ID: {wallet_id}, Address: {address}")
+        else:
+            logging.warning(f"No wallets found in Circle API for user {current_user.id}")
+        
+        # Check local database
+        user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+        if user_wallet:
+            status["db_wallet"] = {
+                "wallet_address": user_wallet.wallet_address,
+                "circle_wallet_id": user_wallet.circle_wallet_id,
+                "wallet_set_id": user_wallet.wallet_set_id,
+            }
+            status["has_db_wallet"] = True
+            logging.info(f"Found wallet in DB: {user_wallet.wallet_address} (Circle ID: {user_wallet.circle_wallet_id})")
+        else:
+            logging.info(f"No wallet found in local database for user {current_user.id}")
+        
+        # Check if there's a mismatch
+        if status["has_circle_wallet"] and status["has_db_wallet"]:
+            circle_addresses = [w.get("address") for w in all_wallets if w.get("address")]
+            if user_wallet.wallet_address not in circle_addresses:
+                status["mismatch"] = True
+                status["mismatch_details"] = f"DB wallet {user_wallet.wallet_address} not found in Circle wallets"
+                logging.warning(f"Wallet mismatch: DB has {user_wallet.wallet_address} but Circle has {circle_addresses}")
+            else:
+                status["mismatch"] = False
+        elif status["has_circle_wallet"] and not status["has_db_wallet"]:
+            status["mismatch"] = True
+            status["mismatch_details"] = "Wallet exists in Circle but not in local database"
+            logging.warning(f"Wallet exists in Circle but not in DB for user {current_user.id}")
+        elif not status["has_circle_wallet"] and status["has_db_wallet"]:
+            status["mismatch"] = True
+            status["mismatch_details"] = "Wallet exists in local database but not in Circle"
+            logging.warning(f"Wallet exists in DB but not in Circle for user {current_user.id}")
+        
+    except Exception as e:
+        import logging
+        logging.error(f"Error checking wallet status: {e}", exc_info=True)
+        status["error"] = str(e)
+    
+    return status
 
 
 @router.post("/circle/init", response_model=CircleInitResponse, deprecated=True)
