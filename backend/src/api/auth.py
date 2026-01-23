@@ -500,26 +500,73 @@ async def circle_connect_init(
 
         # Initialize user to get a challengeId
         # Use ARC-TESTNET (not ARC) for Circle API
-        init_data = await circle_service.initialize_user(
-            user_token,
-            account_type="SCA",
-            blockchains=["ARC-TESTNET"]
-        )
-        challenge_id = init_data.get("challengeId") or init_data.get("challenge_id")
-
-        if not challenge_id:
-            return CircleConnectInitResponse(
-                available=False,
-                message="Circle initialization failed (missing challengeId).",
+        try:
+            init_data = await circle_service.initialize_user(
+                user_token,
+                account_type="SCA",
+                blockchains=["ARC-TESTNET"]
             )
+            challenge_id = init_data.get("challengeId") or init_data.get("challenge_id")
+            
+            # Check if user is already initialized (no challenge needed)
+            if init_data.get("alreadyInitialized"):
+                # User already initialized - check if they have a wallet
+                wallets = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
+                if wallets and len(wallets) > 0:
+                    # User has wallet - settlements already enabled
+                    return CircleConnectInitResponse(
+                        available=True,
+                        app_id=circle_service.app_id or "",
+                        user_token=user_token,
+                        encryption_key=encryption_key,
+                        challenge_id=None,  # No challenge needed
+                        message="User already has a wallet. Settlements are enabled.",
+                    )
+                else:
+                    # User initialized but no wallet - this shouldn't happen, but handle gracefully
+                    return CircleConnectInitResponse(
+                        available=False,
+                        message="User is initialized but no wallet found. Please contact support.",
+                    )
 
-        return CircleConnectInitResponse(
-            available=True,
-            app_id=circle_service.app_id or "",
-            user_token=user_token,
-            encryption_key=encryption_key,
-            challenge_id=challenge_id,
-        )
+            if not challenge_id:
+                return CircleConnectInitResponse(
+                    available=False,
+                    message="Circle initialization failed (missing challengeId).",
+                )
+
+            return CircleConnectInitResponse(
+                available=True,
+                app_id=circle_service.app_id or "",
+                user_token=user_token,
+                encryption_key=encryption_key,
+                challenge_id=challenge_id,
+            )
+        except httpx.HTTPStatusError as init_error:
+            # Handle initialization errors specifically
+            if init_error.response.status_code == 409:
+                error_data = init_error.response.json() if init_error.response.headers.get("content-type", "").startswith("application/json") else {}
+                error_code = error_data.get("code")
+                if error_code == 155106:  # User already initialized
+                    # Check if user has a wallet
+                    wallets = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
+                    if wallets and len(wallets) > 0:
+                        # User has wallet - settlements already enabled
+                        return CircleConnectInitResponse(
+                            available=True,
+                            app_id=circle_service.app_id or "",
+                            user_token=user_token,
+                            encryption_key=encryption_key,
+                            challenge_id=None,  # No challenge needed
+                            message="User already has a wallet. Settlements are enabled.",
+                        )
+                    else:
+                        return CircleConnectInitResponse(
+                            available=False,
+                            message="User is already initialized but no wallet found. Please contact support.",
+                        )
+            # Re-raise to be caught by outer exception handler
+            raise
     except httpx.HTTPStatusError as e:
         # Handle specific HTTP errors
         error_msg = ""

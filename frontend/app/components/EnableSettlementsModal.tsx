@@ -81,13 +81,23 @@ export function EnableSettlementsModal({
 
     try {
       const init = await api.auth.circleConnectInit();
-      if (!init.available || !init.app_id || !init.user_token || !init.encryption_key || !init.challenge_id) {
+      if (!init.available || !init.app_id || !init.user_token || !init.encryption_key) {
         throw new Error(init.message || 'Circle connect is not available in this environment.');
       }
       
       // Validate App ID before initializing SDK
       if (!init.app_id || init.app_id.trim() === '') {
         throw new Error('Circle App ID is missing. Please configure CIRCLE_APP_ID in backend/.env');
+      }
+
+      // If user already has a wallet (challenge_id is null), skip SDK execution
+      if (!init.challenge_id) {
+        // User already initialized and has wallet - just complete the flow
+        await api.auth.circleConnectComplete();
+        setSettlementsEnabled(true);
+        await refresh();
+        onClose();
+        return;
       }
 
       const sdk = new W3SSdk({
@@ -148,6 +158,19 @@ export function EnableSettlementsModal({
         setError('Circle App ID is not recognized. This usually means: (1) The App ID doesn\'t match your Circle Console, (2) Your domain (localhost) is not whitelisted in Circle Console, or (3) There\'s an environment mismatch (Testnet vs Mainnet). Check Circle Console → User Controlled Wallets → Authentication Methods → Allowed Domain and ensure localhost is whitelisted.');
       } else if (errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
         setError('Please log in to enable settlements');
+      } else if (errorMessage.includes('409') || errorMessage.includes('already been initialized') || errorMessage.includes('already initialized')) {
+        // User already initialized - try to complete without challenge
+        try {
+          await api.auth.circleConnectComplete();
+          setSettlementsEnabled(true);
+          await refresh();
+          onClose();
+          return;
+        } catch {
+          setError('User is already initialized. If you already have a wallet, settlements should be enabled. Please refresh the page.');
+        }
+      } else if (errorMessage.includes('hint') && errorMessage.includes('answer')) {
+        setError('Security question validation error: Your hint cannot be the same as your answer. Please choose a different hint or answer when setting up your PIN.');
       } else {
         setError(errorMessage || e?.code || "We couldn't connect right now.");
       }
