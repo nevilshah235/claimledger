@@ -1,13 +1,10 @@
 """
 Circle Gateway Service.
-Handles micropayments via Circle Gateway API.
-
-Uses Circle Gateway for x402 micropayments.
-Uses USDC on Arc for settlement.
+Handles Gateway balance checks (get_balance). x402 create_micropayment/validate_receipt
+are deprecated; evaluations are free. Use verifier_client + /verifier for evaluation.
 """
 
 import os
-import uuid
 import logging
 from decimal import Decimal
 from typing import Optional, Dict, Any
@@ -18,12 +15,8 @@ logger = logging.getLogger(__name__)
 
 class GatewayService:
     """
-    Circle Gateway API client for micropayments.
-    
-    Handles:
-    - Creating micropayments for x402 flows
-    - Validating payment receipts
-    - Checking balances
+    Circle Gateway API client. get_balance is available.
+    create_micropayment and validate_receipt are deprecated (x402; evaluations are free).
     """
     
     def __init__(
@@ -150,157 +143,14 @@ class GatewayService:
         amount: Decimal,
         payment_id: str,
         wallet_address: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
-        """
-        Create a micropayment receipt via Circle Gateway.
-        
-        For x402 micropayments, we issue a receipt token that proves payment.
-        The actual USDC movement can be tracked via Gateway balances.
-        
-        Args:
-            amount: Payment amount in USDC
-            payment_id: Unique payment identifier (used as idempotency key)
-            metadata: Additional metadata for the payment
-            
-        Returns:
-            Receipt token if successful, None otherwise
-            
-        Note:
-            Circle Gateway doesn't have a direct micropayment endpoint.
-            For x402, we:
-            1. Verify agent has sufficient balance via Gateway balances API
-            2. Issue a receipt token (payment_id signed/encoded)
-            3. Track payment in our system
-            4. Actual USDC settlement can happen via Gateway transfers if needed
-        """
-        if not self.api_key:
-            # Demo mode - return mock receipt
-            logger.info(f"Mock mode: Creating mock receipt for payment {payment_id}")
-            return f"mock_receipt_{payment_id}_{uuid.uuid4().hex[:8]}"
-        
-        # Convert amount to USDC format (6 decimals)
-        # USDC uses 6 decimal places, so 0.10 USDC = 100000 (raw units)
-        amount_raw = int(amount * Decimal("1000000"))
-        
-        # Use provided wallet_address or fall back to agent_wallet_address for backward compatibility
-        wallet_to_check = wallet_address or self.agent_wallet_address
-        
-        # Verify Gateway balance if wallet is configured
-        if wallet_to_check:
-            logger.info(f"Verifying Gateway balance for payment of {amount} USDC (wallet: {wallet_to_check[:10]}...)")
-            current_balance = await self.get_balance(wallet_to_check)
-            
-            if current_balance is not None:
-                if current_balance < amount:
-                    logger.error(
-                        f"Insufficient Gateway balance: {current_balance} USDC < "
-                        f"{amount} USDC required for payment {payment_id} (wallet: {wallet_to_check[:10]}...)"
-                    )
-                    return None
-                else:
-                    logger.info(
-                        f"Gateway balance verified: {current_balance} USDC available, "
-                        f"{amount} USDC required - sufficient funds (wallet: {wallet_to_check[:10]}...)"
-                    )
-            else:
-                # Balance check failed (API error, network issue, etc.)
-                # For x402, we can still issue receipt but log warning
-                # In production, you might want to fail here instead
-                logger.warning(
-                    f"Could not verify Gateway balance (API unavailable or wallet not found), "
-                    f"but proceeding with receipt issuance. Payment ID: {payment_id}. "
-                    f"Wallet: {wallet_to_check[:10]}... Consider checking balance manually."
-                )
-        else:
-            logger.info(
-                "Wallet address not provided and agent wallet not configured, issuing receipt without balance verification"
-            )
-        
-        # Issue receipt token
-        logger.info(f"Issuing x402 payment receipt for {amount} USDC (payment_id: {payment_id})")
-        
-        # Issue receipt token
-        # For x402, the receipt is a proof of payment
-        # Format: base64(payment_id:hash) where hash is derived from payment_id + api_key
-        import hashlib
-        import base64
-        
-        # Create receipt hash from payment_id and API key (first 20 chars for consistency)
-        receipt_hash = hashlib.sha256(
-            f"{payment_id}:{self.api_key[:20]}".encode()
-        ).hexdigest()[:16]
-        
-        # Encode as base64: payment_id:hash
-        receipt_token = base64.urlsafe_b64encode(
-            f"{payment_id}:{receipt_hash}".encode()
-        ).decode('utf-8').rstrip('=')
-        
-        logger.info(f"Payment receipt issued: {payment_id} -> {receipt_token[:50]}...")
-        return receipt_token
-    
+        """Deprecated. x402 removed; evaluations are free."""
+        raise NotImplementedError("x402 deprecated: evaluations are free. create_micropayment removed.")
+
     async def validate_receipt(self, receipt: str) -> bool:
-        """
-        Validate a payment receipt.
-        
-        For x402 micropayments, receipts are tokens we issue ourselves.
-        We validate by:
-        1. Decoding the receipt token
-        2. Verifying the format and signature
-        3. Checking if payment_id exists in our system (optional)
-        
-        Args:
-            receipt: Receipt token to validate
-            
-        Returns:
-            True if valid, False otherwise
-        """
-        if not receipt:
-            return False
-            
-        if not self.api_key:
-            # Demo mode - accept all non-empty receipts
-            logger.debug(f"Mock mode: Accepting receipt {receipt[:20]}...")
-            return len(receipt) > 0
-        
-        # Production mode - validate receipt format
-        try:
-            import base64
-            import hashlib
-            
-            # Decode receipt token
-            # Format: base64(payment_id:hash)
-            try:
-                # Add padding if needed
-                receipt_padded = receipt + '=' * (4 - len(receipt) % 4)
-                decoded = base64.urlsafe_b64decode(receipt_padded).decode('utf-8')
-                
-                if ':' not in decoded:
-                    logger.warning(f"Invalid receipt format: missing separator")
-                    return False
-                
-                payment_id, receipt_hash = decoded.split(':', 1)
-                
-                # Verify receipt hash matches expected format
-                # Receipt should be: payment_id:hash where hash is derived from payment_id + api_key
-                expected_hash = hashlib.sha256(
-                    f"{payment_id}:{self.api_key[:20]}".encode()
-                ).hexdigest()[:16]
-                
-                if receipt_hash == expected_hash:
-                    logger.info(f"Receipt validated successfully: {payment_id}")
-                    return True
-                else:
-                    logger.warning(f"Receipt hash mismatch for payment_id: {payment_id}")
-                    return False
-                    
-            except (ValueError, UnicodeDecodeError) as e:
-                logger.warning(f"Failed to decode receipt: {e}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error validating receipt: {e}")
-            return False
+        """Deprecated. x402 removed; evaluations are free."""
+        raise NotImplementedError("x402 deprecated: evaluations are free. validate_receipt removed.")
 
 
 # Singleton instance
