@@ -7,9 +7,14 @@ from src.models import Base
 
 # Database URL from environment
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from backend directory (where this file is located)
+# Go up from src/database.py to backend/
+backend_dir = Path(__file__).parent.parent.parent
+env_path = backend_dir / ".env"
+load_dotenv(dotenv_path=env_path)
 
 # Default to SQLite for quick testing (no PostgreSQL needed)
 # For production, set DATABASE_URL to PostgreSQL connection string
@@ -51,12 +56,37 @@ def init_db():
         # For Cloud SQL, this will create tables in the existing database
         # The database instance itself is already created in Cloud SQL
         Base.metadata.create_all(bind=engine)
+
+        # Lightweight schema patching (for environments without migrations).
+        # Adds columns newer code expects when running against an older DB.
+        with engine.connect() as conn:
+            dialect = conn.dialect.name
+
+            if dialect == "sqlite":
+                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(claims)")).fetchall()]
+                if "description" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN description TEXT"))
+            elif dialect == "postgresql":
+                exists = conn.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = 'claims' AND column_name = 'description'
+                        """
+                    )
+                ).first()
+                if not exists:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN description TEXT"))
+
         db_info = DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL
         # Don't log full connection string for security
         if 'cloudsql' in DATABASE_URL.lower():
             print(f"✅ Database tables initialized (Cloud SQL)")
         else:
             print(f"✅ Database tables initialized (URL: {db_info})")
+        
+        # Note: Users should be created via frontend registration, not seeded automatically
     except Exception as e:
         print(f"⚠️  Warning: Database table initialization failed: {e}")
         print("   The application will continue, but database operations may fail.")
