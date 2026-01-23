@@ -60,55 +60,71 @@ function ClaimantFilterDropdown({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`w-full text-left px-3 py-2 rounded-lg border transition-all duration-200 ${
+        className={`group w-full text-left px-3.5 py-2.5 rounded-lg border transition-all duration-200 flex items-center justify-between ${
           selectedClaimant
-            ? 'border-blue-cobalt bg-blue-cobalt/20'
-            : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20'
+            ? 'border-blue-cobalt bg-blue-cobalt/20 text-white'
+            : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20 text-admin-text-primary'
         }`}
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium admin-text-primary">
-            Claimant: {selectedLabel}
-          </span>
-          <svg 
-            className={`w-4 h-4 opacity-80 transition-transform ${open ? 'rotate-180' : ''}`} 
-            viewBox="0 0 20 20" 
-            fill="currentColor" 
-            aria-hidden="true"
-          >
-            <path
-              fillRule="evenodd"
-              d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
-              clipRule="evenodd"
-            />
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <svg className="w-4 h-4 shrink-0 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
           </svg>
+          <span className="text-sm font-medium truncate">
+            {selectedClaimant ? formatAddress(selectedClaimant) : 'All claimants'}
+          </span>
+          {selectedClaimant && (
+            <span className="text-xs opacity-70 shrink-0">
+              ({getClaimCount(selectedClaimant)})
+            </span>
+          )}
         </div>
+        <svg 
+          className={`w-4 h-4 shrink-0 opacity-70 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} 
+          viewBox="0 0 20 20" 
+          fill="currentColor" 
+          aria-hidden="true"
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+            clipRule="evenodd"
+          />
+        </svg>
       </button>
 
       {open && (
         <div
           role="menu"
           aria-label="Claimant filter"
-          className="absolute left-0 right-0 mt-2 rounded-xl border border-white/10 bg-white/10 backdrop-blur-sm shadow-lg z-50 overflow-hidden max-h-64 overflow-y-auto"
+          className="absolute left-0 right-0 mt-2 rounded-xl border border-white/10 bg-white/10 backdrop-blur-sm shadow-lg z-50 overflow-hidden max-h-64 overflow-y-auto custom-scrollbar"
         >
-          <div className="p-2">
+          <div className="p-1.5">
             <button
               role="menuitem"
               onClick={() => {
                 onSelect(null);
                 setOpen(false);
               }}
-              className={`w-full text-left rounded-lg px-3 py-2 hover:bg-white/10 transition-colors ${
+              className={`w-full text-left rounded-lg px-3 py-2.5 hover:bg-white/10 transition-colors ${
                 !selectedClaimant ? 'bg-blue-cobalt/20' : ''
               }`}
             >
-              <div className="text-sm font-semibold admin-text-primary">All claimants</div>
-              <div className="text-xs admin-text-secondary">Show all claims</div>
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                </svg>
+                <div>
+                  <div className="text-sm font-semibold admin-text-primary">All claimants</div>
+                  <div className="text-xs admin-text-secondary">Show all claims</div>
+                </div>
+              </div>
             </button>
             {claimants.map((address) => {
               const count = getClaimCount(address);
+              const isSelected = selectedClaimant === address;
               return (
                 <button
                   key={address}
@@ -117,14 +133,21 @@ function ClaimantFilterDropdown({
                     onSelect(address);
                     setOpen(false);
                   }}
-                  className={`w-full text-left rounded-lg px-3 py-2 hover:bg-white/10 transition-colors mt-1 ${
-                    selectedClaimant === address 
+                  className={`w-full text-left rounded-lg px-3 py-2.5 hover:bg-white/10 transition-colors mt-1 ${
+                    isSelected 
                       ? 'bg-blue-cobalt/20' 
                       : ''
                   }`}
                 >
-                  <div className="text-sm font-semibold font-mono admin-text-primary">{formatAddress(address)}</div>
-                  <div className="text-xs admin-text-secondary">{count} claim{count !== 1 ? 's' : ''}</div>
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 shrink-0 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold font-mono admin-text-primary truncate">{formatAddress(address)}</div>
+                      <div className="text-xs admin-text-secondary">{count} claim{count !== 1 ? 's' : ''}</div>
+                    </div>
+                  </div>
                 </button>
               );
             })}
@@ -349,17 +372,35 @@ export default function InsurerPage() {
           <div className="grid lg:grid-cols-12 gap-4 lg:gap-6">
             {/* Left: queue */}
             <div className="lg:col-span-4 space-y-4">
+              {/* Queue Header */}
               <Card className="admin-card">
-                <div className="flex items-center justify-between p-1">
-                  <div>
-                    <p className="text-sm font-semibold admin-text-primary">Queue</p>
-                    <p className="text-xs admin-text-secondary mt-0.5">
-                      {filteredClaims.length} of {claims.length} claims
+                <div className="flex items-start justify-between p-4 pb-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <svg className="w-5 h-5 text-blue-cobalt-light shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                      <h2 className="text-base font-bold admin-text-primary">Queue</h2>
+                    </div>
+                    <p className="text-xs admin-text-secondary ml-7">
+                      <span className="font-semibold text-white">{filteredClaims.length}</span> of <span className="font-semibold text-white">{claims.length}</span> claims
                     </p>
                   </div>
-                  <Button size="sm" variant="secondary" onClick={loadClaims} disabled={loadingClaims}>
-                    Refresh
-                  </Button>
+                  <button
+                    onClick={loadClaims}
+                    disabled={loadingClaims}
+                    className="ml-3 p-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed group"
+                    aria-label="Refresh claims"
+                  >
+                    <svg 
+                      className={`w-4 h-4 admin-text-secondary group-hover:text-white transition-colors ${loadingClaims ? 'animate-spin' : ''}`}
+                      fill="none" 
+                      viewBox="0 0 24 24" 
+                      stroke="currentColor"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </button>
                 </div>
               </Card>
 
@@ -372,20 +413,26 @@ export default function InsurerPage() {
                     { key: 'needs_review', label: 'Needs review' },
                     { key: 'awaiting_info', label: 'Awaiting info' },
                     { key: 'approved', label: 'Approved' },
-                  ].map((t) => (
-                    <button
-                      key={t.key}
-                      type="button"
-                      onClick={() => setFilter(t.key as any)}
-                      className={
-                        filter === t.key 
-                          ? 'admin-filter-button-active' 
-                          : 'admin-filter-button-inactive'
-                      }
-                    >
-                      {t.label}
-                    </button>
-                  ))}
+                  ].map((t) => {
+                    const isActive = filter === t.key;
+                    return (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => setFilter(t.key as any)}
+                        className={`group relative px-3.5 py-2 rounded-lg text-xs font-semibold border transition-all duration-200 ${
+                          isActive
+                            ? 'bg-blue-cobalt border-blue-cobalt-light text-white shadow-lg shadow-blue-cobalt/30'
+                            : 'bg-white/5 border-white/15 text-admin-text-secondary hover:bg-white/10 hover:border-white/25 hover:text-white'
+                        }`}
+                      >
+                        {isActive && (
+                          <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-blue-cobalt-light/20 to-transparent pointer-events-none" />
+                        )}
+                        <span className="relative">{t.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Claimant Filter */}
@@ -401,42 +448,69 @@ export default function InsurerPage() {
               </div>
 
               {loadingClaims ? (
-                <Card className="py-12 text-center admin-card">
-                  <div className="flex flex-col items-center gap-3">
-                    <div className="w-6 h-6 border-2 border-blue-cobalt border-t-transparent rounded-full animate-spin" />
-                    <p className="admin-text-secondary text-sm">Loading claims…</p>
+                <Card className="py-16 text-center admin-card">
+                  <div className="flex flex-col items-center gap-4">
+                    <div className="w-8 h-8 border-3 border-blue-cobalt border-t-transparent rounded-full animate-spin" />
+                    <div>
+                      <p className="admin-text-primary font-medium text-sm mb-1">Loading claims</p>
+                      <p className="admin-text-secondary text-xs">Please wait...</p>
+                    </div>
                   </div>
                 </Card>
               ) : filteredClaims.length === 0 ? (
-                <Card className="py-12 text-center admin-card">
-                  <p className="admin-text-primary font-semibold mb-2">No claims</p>
-                  <p className="text-sm admin-text-secondary">Nothing to review in this filter.</p>
+                <Card className="py-16 text-center admin-card">
+                  <div className="w-12 h-12 mx-auto mb-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+                    <svg className="w-6 h-6 admin-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <p className="admin-text-primary font-semibold mb-1.5">No claims found</p>
+                  <p className="text-xs admin-text-secondary">Try adjusting your filters</p>
                 </Card>
               ) : (
-                <div className="space-y-2.5 max-h-[calc(100vh-28rem)] overflow-y-auto pr-1">
-                  {filteredClaims.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => setSelectedClaimId(c.id)}
-                      className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 backdrop-blur-sm ${
-                        selectedClaimId === c.id 
-                          ? 'border-blue-cobalt bg-blue-cobalt/20 shadow-lg shadow-blue-cobalt/20 scale-[1.02]' 
-                          : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20 hover:scale-[1.01]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold admin-text-primary truncate">#{c.id.slice(0, 8)}</p>
-                          <p className="text-xs admin-text-secondary truncate mt-0.5">{c.description || 'No description'}</p>
+                <div className="space-y-2.5 max-h-[calc(100vh-28rem)] overflow-y-auto pr-1.5 custom-scrollbar">
+                  {filteredClaims.map((c) => {
+                    const isSelected = selectedClaimId === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setSelectedClaimId(c.id)}
+                        className={`group w-full text-left p-4 rounded-xl border transition-all duration-200 backdrop-blur-sm relative overflow-hidden ${
+                          isSelected
+                            ? 'border-blue-cobalt bg-[rgba(40,52,75,0.95)] shadow-2xl shadow-blue-cobalt/50 scale-[1.01]'
+                            : 'border-white/10 bg-[rgba(26,35,50,0.7)] hover:bg-[rgba(26,35,50,0.85)] hover:border-white/15 hover:scale-[1.005]'
+                        }`}
+                      >
+                        {isSelected && (
+                          <div className="absolute inset-0 bg-gradient-to-br from-blue-cobalt/20 via-blue-cobalt/10 to-transparent pointer-events-none rounded-xl" />
+                        )}
+                        <div className="relative flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <span className="text-sm font-bold text-white">
+                                #{c.id.slice(0, 8)}
+                              </span>
+                              {isSelected && (
+                                <div className="w-1.5 h-1.5 rounded-full bg-blue-cobalt-light animate-pulse" />
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-300 truncate leading-relaxed">
+                              {c.description || 'No description'}
+                            </p>
+                          </div>
+                          <div className="flex flex-col items-end gap-2 shrink-0">
+                            <Badge status={c.status} />
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-sm font-bold text-white">
+                                {formatCurrency(c.claim_amount)}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="flex flex-col items-end shrink-0">
-                          <Badge status={c.status} />
-                          <span className="text-xs admin-text-secondary mt-1.5 font-medium">{formatCurrency(c.claim_amount)}</span>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
