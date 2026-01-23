@@ -210,27 +210,6 @@ def mock_blockchain_service():
         yield mock_service
 
 
-@pytest.fixture
-def mock_developer_wallets_service():
-    """Mock DeveloperWalletsService for wallet creation tests."""
-    with patch("src.services.developer_wallets.DeveloperWalletsService") as mock_class:
-        mock_service = AsyncMock()
-        mock_service.create_wallet = AsyncMock(return_value={
-            "wallet_id": "test-circle-wallet-id",
-            "address": "0x1234567890123456789012345678901234567890",
-            "wallet_set_id": "test-wallet-set-id"
-        })
-        mock_service.get_wallet = AsyncMock(return_value={
-            "blockchain": "ARC",
-            "address": "0x1234567890123456789012345678901234567890"
-        })
-        mock_service.get_wallet_balance = AsyncMock(return_value={
-            "balances": [{"amount": "100.00", "currency": "USDC"}]
-        })
-        mock_class.return_value = mock_service
-        yield mock_service
-
-
 # Gemini AI Agent Test Fixtures
 
 @pytest.fixture

@@ -120,6 +120,9 @@ class CircleWalletsService:
             request_body["blockchains"] = blockchains
         
         # For User-Controlled wallets, /user/initialize requires userToken in header
+        import logging
+        logging.info(f"Calling Circle initialize_user API with body: {request_body}")
+        
         response = await self.http_client.post(
             f"{self.api_base_url}/user/initialize",
             headers={
@@ -128,17 +131,29 @@ class CircleWalletsService:
             json=request_body
         )
         
+        logging.info(f"Circle initialize_user response status: {response.status_code}")
+        
         # 409 means user is already initialized - that's OK, they should have a wallet
         if response.status_code == 409:
             error_data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
             error_code = error_data.get("code")
+            error_message = error_data.get("message", "")
+            logging.warning(f"Circle API returned 409 (Conflict): code={error_code}, message={error_message}")
+            logging.warning(f"Full error response: {error_data}")
+            
             if error_code == 155106:  # User already initialized
                 # User is already initialized - return empty challenge (no challenge needed)
+                logging.info("User is already initialized in Circle - no challenge_id available")
                 return {"challengeId": None, "alreadyInitialized": True}
         
         response.raise_for_status()
         
-        return response.json()["data"]
+        response_data = response.json()
+        challenge_id = response_data.get("data", {}).get("challengeId")
+        logging.info(f"Circle initialize_user successful - challenge_id: {challenge_id}")
+        logging.info(f"Full response data: {response_data}")
+        
+        return response_data["data"]
 
     async def create_user_token(self, user_id: str) -> Dict[str, Any]:
         """
@@ -174,6 +189,8 @@ class CircleWalletsService:
         Returns:
             List of wallet objects
         """
+        import logging
+        
         if not self.api_key:
             raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
         
@@ -181,18 +198,39 @@ class CircleWalletsService:
         if blockchains:
             params["blockchains"] = ",".join(blockchains)
         
-        response = await self.http_client.get(
-            f"{self.api_base_url}/users/{user_id}/wallets",
-            params=params
-        )
+        url = f"{self.api_base_url}/users/{user_id}/wallets"
+        logging.info(f"Querying Circle API: GET {url} with params: {params}")
+        
+        response = await self.http_client.get(url, params=params)
         
         # 404 means user has no wallets yet - return empty list (not an error)
         if response.status_code == 404:
+            logging.info(f"Circle API returned 404 for user {user_id} - no wallets found")
             return []
         
         response.raise_for_status()
         
-        return response.json()["data"].get("wallets", [])
+        response_data = response.json()
+        logging.info(f"Circle API full response for user {user_id}: {response_data}")
+        
+        wallets = response_data.get("data", {}).get("wallets", [])
+        logging.info(f"Circle API returned {len(wallets)} wallet(s) for user {user_id}")
+        
+        if wallets:
+            for i, wallet in enumerate(wallets):
+                wallet_id = wallet.get("walletId") or wallet.get("id") or wallet.get("wallet_id")
+                address = wallet.get("address")
+                blockchain = wallet.get("blockchain")
+                logging.info(f"  Wallet {i+1}: id={wallet_id}, address={address}, blockchain={blockchain}")
+                logging.info(f"  Full wallet data: {wallet}")
+        else:
+            logging.warning(f"No wallets in response data. Full response structure: {response_data}")
+            # Check if there's data but no wallets key
+            data = response_data.get("data", {})
+            if data and "wallets" not in data:
+                logging.warning(f"Response has 'data' key but no 'wallets' key. Data keys: {list(data.keys())}")
+        
+        return wallets
     
     async def list_wallets(self, user_token: str) -> List[Dict[str, Any]]:
         """
@@ -201,24 +239,53 @@ class CircleWalletsService:
         Circle endpoint: GET /v1/w3s/wallets
         Requires X-User-Token header.
         
+        This is the correct endpoint for User-Controlled wallets (not get_user_wallets).
+        
         Args:
             user_token: Circle user token from create_user_token()
             
         Returns:
             List of wallet objects
         """
+        import logging
+        
         if not self.api_key:
             raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
         
+        url = f"{self.api_base_url}/wallets"
+        logging.info(f"Querying Circle API (User-Controlled wallets): GET {url} with X-User-Token header")
+        
         response = await self.http_client.get(
-            f"{self.api_base_url}/wallets",
+            url,
             headers={
                 "X-User-Token": user_token
             }
         )
+        
+        # 404 means user has no wallets yet - return empty list (not an error)
+        if response.status_code == 404:
+            logging.info(f"Circle API returned 404 for user token - no wallets found")
+            return []
+        
         response.raise_for_status()
         
-        return response.json()["data"].get("wallets", [])
+        response_data = response.json()
+        logging.info(f"Circle API full response (User-Controlled wallets): {response_data}")
+        
+        wallets = response_data.get("data", {}).get("wallets", [])
+        logging.info(f"Circle API returned {len(wallets)} wallet(s) using user token endpoint")
+        
+        if wallets:
+            for i, wallet in enumerate(wallets):
+                wallet_id = wallet.get("walletId") or wallet.get("id") or wallet.get("wallet_id")
+                address = wallet.get("address")
+                blockchain = wallet.get("blockchain")
+                logging.info(f"  Wallet {i+1}: id={wallet_id}, address={address}, blockchain={blockchain}")
+                logging.info(f"  Full wallet data: {wallet}")
+        else:
+            logging.warning(f"No wallets in response data. Full response structure: {response_data}")
+        
+        return wallets
     
     async def create_wallet(
         self,
