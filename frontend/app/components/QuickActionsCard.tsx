@@ -17,7 +17,7 @@ export function QuickActionsCard({
 
       <div className="space-y-3">
         <Link
-          href="/login?role=claimant"
+          href="/"
           className="flex items-center justify-between rounded-xl border border-border bg-surface px-4 py-3 hover:bg-surface-light hover:border-primary transition-colors"
         >
           <div>

@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
+import Image from 'next/image';
 import { api } from '@/lib/api';
 import { useAuth } from '../providers/AuthProvider';
 
@@ -16,29 +17,11 @@ export function ChatAssistant({
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       from: 'assistant',
-      text:
-        role === 'insurer'
-          ? 'Ask me to summarize a claim, explain risk flags, or guide settlement.'
-          : 'Ask me what evidence you need, explain status, or what to do next.',
+      text: "Hi! I'm your UClaim assistant. How can I help with your claim today?",
     },
   ]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
-
-  const suggestions = useMemo(() => {
-    if (role === 'insurer') {
-      return [
-        'Summarize this claim in plain English.',
-        'What’s the recommended next action?',
-        'Explain the decision and confidence.',
-      ];
-    }
-    return [
-      'What evidence do you need from me?',
-      'Explain my claim status.',
-      'What are my next steps?',
-    ];
-  }, [role]);
 
   const send = async (text: string) => {
     const trimmed = text.trim();
@@ -61,7 +44,7 @@ export function ChatAssistant({
         {
           from: 'assistant',
           text:
-            'I can’t reach the assistant service right now. In demo mode, try: submit a claim → evaluation runs → upload requested evidence if needed → insurer settles approved claims.',
+            "I can't reach the assistant service right now. In demo mode, try: submit a claim → evaluation runs → upload requested evidence if needed → insurer settles approved claims.",
         },
       ]);
     } finally {
@@ -75,21 +58,28 @@ export function ChatAssistant({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="fixed bottom-5 right-5 z-50 rounded-full w-12 h-12 gradient-hero shadow-lg flex items-center justify-center"
+        className="fixed bottom-5 right-5 z-50 rounded-full w-24 h-24 shadow-lg overflow-hidden bg-transparent hover:scale-105 transition-transform p-0"
         aria-label="Open assistant"
       >
-        <span className="text-white text-lg">AI</span>
+        <Image
+          src="/chatbot-logo.png"
+          alt="UClaim Assistant"
+          width={96}
+          height={96}
+          className="w-full h-full object-cover"
+          unoptimized
+        />
       </button>
 
       {/* Panel */}
       {open && (
         <div className="fixed bottom-20 right-5 z-50 w-[360px] max-w-[calc(100vw-2.5rem)]">
-          <div className="glass-card p-0 overflow-hidden">
+          <div className="glass-card p-0 overflow-hidden bg-slate-900/95 backdrop-blur-xl border-slate-700/50">
             <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
               <div>
-                <div className="text-sm font-semibold text-white">Assistant</div>
-                <div className="text-xs text-slate-400">
-                  AI may be wrong; verify before paying out.
+                <div className="coming-soon-badge">COMING SOON</div>
+                <div className="text-xs text-slate-300 mt-1">
+                  UClaim assistant - powered by advanced AI
                 </div>
               </div>
               <button
@@ -107,32 +97,18 @@ export function ChatAssistant({
                   key={idx}
                   className={`text-sm rounded-xl px-3 py-2 border ${
                     m.from === 'assistant'
-                      ? 'bg-white/5 border-white/10 text-slate-200'
-                      : 'bg-cyan-500/10 border-cyan-500/20 text-white'
+                      ? 'bg-white/10 border-white/20 text-slate-100'
+                      : 'bg-cyan-500/20 border-cyan-500/30 text-white'
                   }`}
                 >
                   {m.text}
                 </div>
               ))}
-
-              <div className="flex flex-wrap gap-2 pt-1">
-                {suggestions.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    className="text-xs px-2 py-1 rounded-full bg-white/5 border border-white/10 text-slate-200 hover:bg-white/10"
-                    onClick={() => send(s)}
-                    disabled={sending}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
             </div>
 
             <div className="px-4 py-3 border-t border-white/10 flex gap-2">
               <input
-                className="input flex-1 py-2"
+                className="flex-1 py-2 px-3 rounded-lg bg-slate-800/50 border border-slate-600/50 text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50"
                 placeholder="Ask a question…"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -158,4 +134,3 @@ export function ChatAssistant({
 }
 
 export default ChatAssistant;
-
