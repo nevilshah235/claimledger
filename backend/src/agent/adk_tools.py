@@ -63,7 +63,7 @@ def create_adk_tools():
             FunctionTool(validate_claim_data),
         ]
         
-        # Layer 4: Verification tools (x402 Paid)
+        # Layer 4: Verification tools (free)
         verification_tools = [
             FunctionTool(verify_document),
             FunctionTool(verify_image),

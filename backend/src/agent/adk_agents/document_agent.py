@@ -427,12 +427,14 @@ IMPORTANT: Extract ALL fields you can identify. Do not limit yourself to only th
             return data
         
         # Otherwise, wrap old structure in new format for backward compatibility
+        tables = data.get("tables") if isinstance(data.get("tables"), list) else []
+        line_items = data.get("line_items") if isinstance(data.get("line_items"), list) else []
         normalized = {
             "document_classification": {
                 "category": data.get("document_type", "unknown"),
                 "structure": "semi_structured",  # Default assumption
-                "has_tables": False,
-                "has_line_items": False,
+                "has_tables": bool(tables),
+                "has_line_items": bool(line_items),
                 "primary_content_type": "financial" if data.get("amount") else "general"
             },
             "extracted_fields": {
@@ -442,6 +444,8 @@ IMPORTANT: Extract ALL fields you can identify. Do not limit yourself to only th
                 "vendor": data.get("vendor"),
                 "description": data.get("description", "")
             },
+            "line_items": line_items,
+            "tables": tables,
             "metadata": {
                 "confidence": data.get("confidence", 0.7),
                 "extraction_method": "legacy_format",
@@ -450,9 +454,10 @@ IMPORTANT: Extract ALL fields you can identify. Do not limit yourself to only th
             "valid": data.get("valid", True)
         }
         
-        # Preserve any additional fields
+        # Preserve any additional top-level fields (exclude tables/line_items; already at top level)
+        skip = {"document_type", "amount", "date", "vendor", "description", "valid", "confidence", "notes", "tables", "line_items"}
         for key, value in data.items():
-            if key not in ["document_type", "amount", "date", "vendor", "description", "valid", "confidence", "notes"]:
+            if key not in skip and key not in normalized:
                 normalized["extracted_fields"][key] = value
         
         return normalized

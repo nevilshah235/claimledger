@@ -8,9 +8,12 @@ This agent orchestrates the claim evaluation by:
 4. Requesting additional data when evidence is insufficient
 """
 
+import json
 import os
 from typing import Dict, Any, List, Optional
 from decimal import Decimal
+
+from ..tools import verify_document, verify_image, verify_fraud
 
 try:
     from google.adk.agents import LlmAgent
@@ -106,38 +109,23 @@ class ADKOrchestratorAgent:
                 model=self.model_name,
                 name="orchestrator_agent",
                 description="Main orchestrator agent that evaluates insurance claims by calling verification tools and making decisions",
-                instruction="""You are an insurance claim evaluation orchestrator. Follow the mandatory 4-layer process.
+                instruction="""You are an insurance claim evaluation orchestrator.
 
-**MANDATORY Tool Calling Sequence (DO NOT SKIP ANY STEP):**
+**CRITICAL — You MUST use function/tool calls:** Invoke the tools (estimate_repair_cost, cross_check_amounts, validate_claim_data, verify_fraud) via the platform's function/tool-calling API. Do NOT fabricate or guess their results in your response. The system will execute each tool and return real results. Only after you have received the actual results from all four Phase 2 tools, output your final JSON decision.
 
-STEP 1: Extract Data (ALWAYS FIRST)
-- MUST call extract_document_data(claim_id, document_path) for EACH document
-- MUST call extract_image_data(claim_id, image_path) for EACH image (if available)
+**Phase 1 (DONE):** verify_document and verify_image have been run. Use the PRE-VERIFIED data. Do NOT call verify_document, verify_image, extract_document_data, or extract_image_data.
 
-STEP 2: Estimate Costs (ALWAYS AFTER EXTRACTION)
-- MUST call estimate_repair_cost(claim_id, extracted_data, damage_assessment)
-- MUST call cross_check_amounts(claim_id, claim_amount, extracted_total, estimated_cost, document_amount)
+**Phase 2 — MANDATORY (invoke each via function/tool call):**
+- estimate_repair_cost(claim_id, extracted_data, damage_assessment)
+- cross_check_amounts(claim_id, claim_amount, extracted_total, estimated_cost, document_amount, extracted_total_currency, document_amount_currency) — when the document is in INR/Rs/₹, you MUST pass extracted_total_currency and document_amount_currency (e.g. "INR", "Rs") so the tool converts to USD. Claim is always USDC. Never compare claim (USD) to raw rupees (e.g. 40000) as if same currency.
+- validate_claim_data(claim_id, claim_amount, extracted_data, damage_assessment, cost_analysis, cross_check_result)
+- verify_fraud(claim_id) — you MUST call this; use its fraud_score and risk_level in your reasoning.
 
-STEP 3: Validate Claim (ALWAYS AFTER COST ESTIMATION)
-- MUST call validate_claim_data(claim_id, claim_amount, extracted_data, damage_assessment, cost_analysis, cross_check_result)
+**Phase 3:** If amounts match, validate_claim_data recommends PROCEED, verify_fraud shows low risk, and confidence >= 0.95, then call approve_claim(claim_id, amount, recipient).
 
-STEP 4: Verify (ONLY IF VALIDATION PASSES)
-- MUST call verify_document(claim_id, document_path) if documents exist
-- MUST call verify_image(claim_id, image_path) if images exist
-- MUST call verify_fraud(claim_id) - ALWAYS REQUIRED
+**Contradictions:** Use the cross_check_amounts tool's "warnings" field as the source for amount-related contradictions. Do not invent contradictions that compare USD to raw INR.
 
-**Amount Validation Process (MANDATORY):**
-1. Extract total_amount from extract_document_data result: Check extracted_fields for total_amount, grand_total, final_total. If not found, calculate: digit_liability + customer_liability.
-2. Call cross_check_amounts with claim_amount, extracted_total, estimated_cost, document_amount.
-3. If matches == false: Add to contradictions. If difference_percent > 20%: Set fraud_risk >= 0.3. If difference_percent > 50%: Set fraud_risk >= 0.7.
-
-**Fraud Detection Guidelines:**
-High Risk (fraud_risk >= 0.7) → FRAUD_DETECTED: Amount mismatch > 50%, missing critical fields, invalid dates, multiple contradictions.
-Medium Risk (0.3 <= fraud_risk < 0.7) → NEEDS_REVIEW: Amount mismatch 20-50%, missing some fields, minor inconsistencies.
-Low Risk (fraud_risk < 0.3) → Can auto-approve if confidence >= 0.95: Amounts match (< 5% difference), all fields present, no contradictions.
-
-**REQUIRED Output Format (JSON ONLY - NO MARKDOWN, NO CODE BLOCKS):**
-Return ONLY valid JSON: {"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEEDS_REVIEW"|"NEEDS_MORE_DATA"|"INSUFFICIENT_DATA"|"FRAUD_DETECTED", "confidence": 0.0-1.0, "reasoning": "Brief explanation", "tool_results": {...}, "requested_data": [], "human_review_required": true|false, "review_reasons": [], "contradictions": [], "fraud_risk": 0.0-1.0}""",
+**Output:** After all Phase 2 tools have been invoked and you have their real results, return ONLY valid JSON: {"decision": "...", "confidence": 0.0-1.0, "reasoning": "...", "requested_data": [], "human_review_required": bool, "review_reasons": [], "contradictions": [], "fraud_risk": 0.0-1.0}. Do NOT include "tool_results" — the system records those from your tool calls.""",
                 tools=tools,  # Include all ADK tools for autonomous calling
             )
         except Exception as e:
@@ -149,7 +137,8 @@ Return ONLY valid JSON: {"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEE
         claim_id: str,
         claim_amount: Decimal,
         claimant_address: str,
-        evidence: List[Dict[str, Any]]
+        evidence: List[Dict[str, Any]],
+        claim_description: str = ""
     ) -> Dict[str, Any]:
         """
         Evaluate a claim by autonomously calling tools and making decisions.
@@ -159,6 +148,7 @@ Return ONLY valid JSON: {"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEE
             claim_amount: Claim amount in USDC
             claimant_address: Claimant wallet address
             evidence: List of evidence dicts with file_type and file_path
+            claim_description: Optional claim description for relevance checking
             
         Returns:
             {
@@ -183,7 +173,7 @@ Return ONLY valid JSON: {"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEE
             return await self._fallback_evaluation(claim_id, claim_amount, claimant_address, evidence)
         
         try:
-            result = await self._ai_evaluation_with_tools(claim_id, claim_amount, claimant_address, evidence)
+            result = await self._ai_evaluation_with_tools(claim_id, claim_amount, claimant_address, evidence, claim_description)
             print(f"   └─ ✅ Evaluation completed successfully")
             return result
         except ValueError as e:
@@ -221,7 +211,8 @@ Return ONLY valid JSON: {"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEE
         claim_id: str,
         claim_amount: Decimal,
         claimant_address: str,
-        evidence: List[Dict[str, Any]]
+        evidence: List[Dict[str, Any]],
+        claim_description: str = ""
     ) -> Dict[str, Any]:
         """Use ADK agent to autonomously call tools and make decisions."""
         from ..adk_runtime import get_adk_runtime
@@ -234,6 +225,66 @@ Return ONLY valid JSON: {"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEE
         images = [e for e in evidence if e.get("file_type") == "image"]
         print(f"   └─ Evidence breakdown: {len(documents)} document(s), {len(images)} image(s)")
         
+        # --- Phase 1 (pre-run): verify_document and verify_image so we have doc/image data before the LLM ---
+        pre_run_tool_results: Dict[str, Any] = {}
+        if documents or images:
+            print(f"   └─ Pre-running Phase 1 verify_document/verify_image: {len(documents)} document(s), {len(images)} image(s)")
+        for d in documents:
+            path = d.get("file_path", "")
+            if not path:
+                continue
+            try:
+                r = await verify_document(claim_id, path)
+                pre_run_tool_results["verify_document"] = r
+            except Exception as e:
+                pre_run_tool_results["verify_document"] = {
+                    "success": False,
+                    "error": str(e),
+                    "extracted_data": {},
+                    "valid": False,
+                    "cost": 0.0,
+                }
+        for i in images:
+            path = i.get("file_path", "")
+            if not path:
+                continue
+            try:
+                r = await verify_image(claim_id, path)
+                pre_run_tool_results["verify_image"] = r
+            except Exception as e:
+                pre_run_tool_results["verify_image"] = {
+                    "success": False,
+                    "error": str(e),
+                    "damage_assessment": {},
+                    "valid": False,
+                    "cost": 0.0,
+                }
+        vdoc = pre_run_tool_results.get("verify_document") or {}
+        vimg = pre_run_tool_results.get("verify_image") or {}
+        extracted_data = vdoc.get("extracted_data", {}) if isinstance(vdoc, dict) else {}
+        damage_assessment = vimg.get("damage_assessment", {}) if isinstance(vimg, dict) else {}
+        doc_valid = vdoc.get("valid", False) if isinstance(vdoc, dict) else False
+        img_valid = vimg.get("valid", False) if isinstance(vimg, dict) else False
+        # Surface document currency for cross_check_amounts (INR/Rs must be converted to USD)
+        ef = (extracted_data or {}).get("extracted_fields") if isinstance(extracted_data, dict) else {}
+        if not isinstance(ef, dict):
+            ef = {}
+        doc_currency = ef.get("currency") or ((extracted_data or {}).get("currency") if isinstance(extracted_data, dict) else None)
+        doc_currency_str = str(doc_currency) if doc_currency else "not set (if amounts are in INR/Rs/₹, pass extracted_total_currency and document_amount_currency to cross_check_amounts)"
+        if documents or images:
+            pre_verified_block = f"""
+**PRE-VERIFIED DATA (Phase 1 — already run):**
+- verify_document: extracted_data={json.dumps(extracted_data, default=str)}, valid={doc_valid}
+- verify_image: damage_assessment={json.dumps(damage_assessment, default=str)}, valid={img_valid}
+- Document currency: {doc_currency_str}. When calling cross_check_amounts, you MUST pass extracted_total_currency and document_amount_currency when the document is in INR/Rs/₹ so amounts are converted to USD. Claim is always USDC. Never compare $400 (claim) to 40000 (rupees) as if both were the same currency.
+
+Use the above when calling estimate_repair_cost, cross_check_amounts, validate_claim_data, verify_fraud. Do NOT call verify_document, verify_image, extract_document_data, or extract_image_data.
+"""
+        else:
+            pre_verified_block = """
+**PRE-VERIFIED DATA (Phase 1 — already run):** No documents or images. Use empty extracted_data and damage_assessment for Phase 2 tools. Do NOT call verify_document or verify_image.
+"""
+        
         # Verify tools are available
         from ..adk_tools import get_adk_tools
         tools = get_adk_tools()
@@ -241,49 +292,32 @@ Return ONLY valid JSON: {"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEE
         if not tools:
             print(f"   └─ ⚠️  WARNING: No tools available! Tool calling will not work.")
         
-        prompt = f"""Evaluate this insurance claim:
+        prompt = f"""Evaluate this insurance claim.
 
+**STEP 1 — Invoke tools via function/tool calls (do NOT skip, do NOT fabricate results):**
+You MUST invoke each of these tools using the platform's function/tool-calling API. The system will execute them and return real results. Do NOT guess or invent tool outputs; do NOT put made-up "tool_results" in your final JSON.
+
+1) estimate_repair_cost(claim_id="{claim_id}", extracted_data=<from PRE-VERIFIED>, damage_assessment=<from PRE-VERIFIED>)
+2) cross_check_amounts(claim_id="{claim_id}", claim_amount={float(claim_amount)}, extracted_total=<from extracted_fields>, estimated_cost=<from step 1>, document_amount=<same or from extracted_fields>, extracted_total_currency=<extracted_fields.currency e.g. "INR" or "Rs" when document is in rupees>, document_amount_currency=<same>). Claim is USDC. When the document is in INR/Rs/₹, you MUST pass extracted_total_currency and document_amount_currency so the tool converts to USD. Never compare $400 (claim) to 40000 (rupees) as if both were USD.
+3) validate_claim_data(claim_id="{claim_id}", claim_amount={float(claim_amount)}, extracted_data=<from PRE-VERIFIED>, damage_assessment=<from PRE-VERIFIED>, cost_analysis=<from step 1>, cross_check_result=<from step 2>)
+4) verify_fraud(claim_id="{claim_id}") — you MUST call this.
+
+**STEP 2 — After you have the real results from all four tools, return your final JSON:**
+{{"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEEDS_REVIEW"|"NEEDS_MORE_DATA"|"INSUFFICIENT_DATA"|"FRAUD_DETECTED", "confidence": 0.0-1.0, "reasoning": "Brief explanation", "requested_data": [], "human_review_required": true|false, "review_reasons": [], "contradictions": [], "fraud_risk": 0.0-1.0}}
+Do NOT include "tool_results" in your JSON; the system records those from your tool calls. For contradictions, use the cross_check_amounts "warnings" (amounts there are in USD after conversion). Never write a contradiction that compares claim (USD) to a raw document number in INR.
+
+---
 Claim ID: {claim_id}
-Claim Amount: ${float(claim_amount):,.2f}
+Claim Amount: ${float(claim_amount):,.2f} (USDC)
 Claimant Address: {claimant_address}
+Claim description: {claim_description or "(none)"}
 
 Available Evidence:
 {evidence_context}
+{pre_verified_block}
+**Phase 1 (DONE):** Use PRE-VERIFIED data. Do NOT call verify_document, verify_image, extract_document_data, or extract_image_data.
 
-**MANDATORY Tool Calling Sequence (DO NOT SKIP ANY STEP):**
-
-STEP 1: Extract Data (ALWAYS FIRST)
-- MUST call extract_document_data(claim_id="{claim_id}", document_path="<file_path>") for EACH document
-- MUST call extract_image_data(claim_id="{claim_id}", image_path="<file_path>") for EACH image (if available)
-
-STEP 2: Estimate Costs (ALWAYS AFTER EXTRACTION)
-- MUST call estimate_repair_cost(claim_id="{claim_id}", extracted_data={{...}}, damage_assessment={{...}})
-- MUST call cross_check_amounts(claim_id="{claim_id}", claim_amount={float(claim_amount)}, extracted_total=..., estimated_cost=..., document_amount=...)
-
-STEP 3: Validate Claim (ALWAYS AFTER COST ESTIMATION)
-- MUST call validate_claim_data(claim_id="{claim_id}", claim_amount={float(claim_amount)}, extracted_data={{...}}, damage_assessment={{...}}, cost_analysis={{...}}, cross_check_result={{...}})
-
-STEP 4: Verify (ONLY IF VALIDATION PASSES)
-- MUST call verify_document(claim_id="{claim_id}", document_path="<file_path>") if documents exist
-- MUST call verify_image(claim_id="{claim_id}", image_path="<file_path>") if images exist
-- MUST call verify_fraud(claim_id="{claim_id}") - ALWAYS REQUIRED
-
-**Amount Validation Process (MANDATORY):**
-1. Extract total_amount from extract_document_data result: Check extracted_fields for total_amount, grand_total, final_total. If not found, calculate: digit_liability + customer_liability. Store as extracted_total.
-2. Call cross_check_amounts with claim_amount={float(claim_amount)}, extracted_total, estimated_cost, document_amount.
-3. Check cross_check_amounts result: If matches == false, add to contradictions. If difference_percent > 20%, set fraud_risk >= 0.3. If difference_percent > 50%, set fraud_risk >= 0.7.
-4. Flag contradictions: Format as "Claim amount (₹X) differs from extracted total (₹Y) by Z%". Add to contradictions array.
-
-**Fraud Detection Guidelines:**
-High Risk (fraud_risk >= 0.7) → FRAUD_DETECTED: Amount mismatch > 50%, missing critical fields, invalid dates, multiple contradictions.
-Medium Risk (0.3 <= fraud_risk < 0.7) → NEEDS_REVIEW: Amount mismatch 20-50%, missing some fields, minor inconsistencies.
-Low Risk (fraud_risk < 0.3) → Can auto-approve if confidence >= 0.95: Amounts match (< 5% difference), all fields present, no contradictions.
-
-**REQUIRED Output Format (JSON ONLY - NO MARKDOWN, NO CODE BLOCKS):**
-Return ONLY valid JSON matching this exact structure:
-{{"decision": "AUTO_APPROVED"|"APPROVED_WITH_REVIEW"|"NEEDS_REVIEW"|"NEEDS_MORE_DATA"|"INSUFFICIENT_DATA"|"FRAUD_DETECTED", "confidence": 0.0-1.0, "reasoning": "Brief explanation", "tool_results": {{...}}, "requested_data": [], "human_review_required": true|false, "review_reasons": [], "contradictions": [], "fraud_risk": 0.0-1.0}}
-
-**CRITICAL**: Return ONLY the JSON object. No markdown formatting (no ```json). No code blocks. No explanations outside JSON. All fields are REQUIRED."""
+**Fraud/Evidence:** If evidence is irrelevant, random, or does not support the claim → FRAUD_DETECTED, fraud_risk >= 0.7. Use verify_fraud's real fraud_score and risk_level for fraud_risk. If cross_check_amounts.matches is false after conversion, use its "warnings" for contradictions. Return ONLY the JSON object; no markdown, no code blocks."""
         
         # Create user message
         user_message = types.Content(
@@ -304,7 +338,7 @@ Return ONLY valid JSON matching this exact structure:
         await runtime.get_or_create_session(user_id, session_id)
         
         response_text = ""
-        tool_results = {}
+        tool_results = dict(pre_run_tool_results)  # Phase 1: start with pre-run verify_document/verify_image
         tool_call_count = 0
         pending_tool_calls = {}  # Track tool calls by ID to match with responses
         
@@ -425,6 +459,15 @@ Return ONLY valid JSON matching this exact structure:
         print(f"   └─ Total tool calls detected: {tool_call_count}")
         print(f"   └─ Tool results collected: {len(tool_results)} ({', '.join(tool_results.keys()) if tool_results else 'none'})")
         
+        # Fallback: run verify_fraud when the model did not invoke it (e.g. when it returns JSON with fabricated tool_results instead of using function calls)
+        if "verify_fraud" not in tool_results:
+            print(f"   └─ verify_fraud not in tool results; running verify_fraud(claim_id) as fallback")
+            try:
+                tool_results["verify_fraud"] = await verify_fraud(claim_id)
+            except Exception as e:
+                tool_results["verify_fraud"] = {"success": False, "error": str(e), "fraud_score": 0.5, "risk_level": "UNKNOWN", "cost": 0.0}
+            print(f"   └─ Fallback verify_fraud completed")
+        
         # Validate tool calls
         validation_result = self._validate_tool_calls(tool_results, evidence, claim_id)
         if not validation_result["valid"]:
@@ -444,6 +487,16 @@ Return ONLY valid JSON matching this exact structure:
             print(f"   └─ ⚠️  Schema validation errors: {', '.join(validation_errors[:3])}")
             # Fix common issues
             result = self._fix_schema_issues(result, validation_errors)
+        
+        # Prefer cross_check_amounts.warnings for amount-related contradictions (they use USD after conversion; LLM may have compared to raw INR)
+        cc = tool_results.get("cross_check_amounts") or {}
+        if isinstance(cc, dict):
+            warnings = cc.get("warnings") or []
+            if isinstance(warnings, list) and warnings:
+                existing = result.get("contradictions") or []
+                # Add cross_check warnings and de-dupe, keeping order
+                merged = list(dict.fromkeys(existing + [str(w) for w in warnings]))
+                result["contradictions"] = merged
         
         # Process decision based on confidence
         agent_confidence = float(result.get("confidence", 0.5))
@@ -465,6 +518,16 @@ Return ONLY valid JSON matching this exact structure:
         decision = result.get("decision", "NEEDS_REVIEW")
         contradictions = result.get("contradictions", [])
         fraud_risk = float(result.get("fraud_risk", 0.5))
+        
+        # Demo: when all evidence is available and extraction succeeded, try to approve for end-to-end settlement
+        if os.getenv("DEMO_AUTO_APPROVE") in ("1", "true", "True"):
+            if (
+                decision != "FRAUD_DETECTED"
+                and self._demo_can_auto_approve(tool_results, documents, images, fraud_risk, contradictions)
+            ):
+                confidence = 0.95
+                decision = "AUTO_APPROVED"
+                print(f"   └─ [DEMO_AUTO_APPROVE] Promoting to AUTO_APPROVED (extraction OK, fraud low, no contradictions)")
         
         # Enforce decision rules in code (override agent decision if incorrect)
         original_decision = decision
@@ -637,8 +700,8 @@ Return ONLY valid JSON matching this exact structure:
         """Calculate confidence based on tool results."""
         confidence = agent_confidence
         
-        # Boost confidence if all tools called successfully
-        required_tools = ["extract_document_data", "cross_check_amounts", "validate_claim_data", "verify_fraud"]
+        # Boost confidence if all Phase 2 tools called successfully (verify_document/verify_image are in tool_results from pre-run when evidence exists)
+        required_tools = ["estimate_repair_cost", "cross_check_amounts", "validate_claim_data", "verify_fraud"]
         called_tools = [tool for tool in required_tools if tool in tool_results]
         tool_completion_rate = len(called_tools) / len(required_tools)
         
@@ -745,6 +808,29 @@ Return ONLY valid JSON matching this exact structure:
         
         return result
     
+    def _demo_can_auto_approve(
+        self,
+        tool_results: Dict[str, Any],
+        documents: List[Dict[str, Any]],
+        images: List[Dict[str, Any]],
+        fraud_risk: float,
+        contradictions: List[str],
+    ) -> bool:
+        """
+        Demo helper: True when we have successful extraction for all evidence,
+        low fraud risk, and no contradictions. Used with DEMO_AUTO_APPROVE=1
+        to drive end-to-end trustless AI settlement.
+        """
+        if fraud_risk >= 0.3 or len(contradictions) > 0:
+            return False
+        if not documents and not images:
+            return False
+        if documents and (tool_results.get("verify_document") or {}).get("success"):
+            return True
+        if images and (tool_results.get("verify_image") or {}).get("success"):
+            return True
+        return False
+    
     def _enforce_decision_rules(
         self,
         confidence: float,
@@ -759,6 +845,10 @@ Return ONLY valid JSON matching this exact structure:
         Returns:
             Corrected decision based on thresholds
         """
+        # Trust the agent's explicit fraud/reject decision (LLM saw irrelevant or fraudulent evidence)
+        if agent_decision == "FRAUD_DETECTED":
+            return "FRAUD_DETECTED"
+
         # Rule 1: FRAUD_DETECTED if fraud_risk >= 0.7 (highest priority)
         if fraud_risk >= self.FRAUD_RISK_THRESHOLD:
             return "FRAUD_DETECTED"

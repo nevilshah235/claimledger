@@ -1,289 +1,114 @@
 """
-Agent Tools.
-4 explicit tools for the insurance claim evaluation agent.
+Agent tools for claim evaluation.
 
-1. verify_document - Document verification (x402-paid)
-2. verify_image - Image analysis (x402-paid)
-3. verify_fraud - Fraud detection (x402-paid)
-4. approve_claim - Onchain settlement
+1. verify_document - Document verification (free)
+2. verify_image - Image analysis (free)
+3. verify_fraud - Fraud detection (free)
+4. approve_claim - On-chain settlement
 
-Uses Circle Gateway for x402 micropayments.
-Uses USDC on Arc for settlement.
+Evaluations are free. Settlement uses USDC on Arc.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from decimal import Decimal
-from contextvars import ContextVar
 
-from ..services.x402_client import get_x402_client, X402PaymentError
+from ..services.verifier_client import verify_document as _verify_document, verify_image as _verify_image, verify_fraud as _verify_fraud
 from ..services.blockchain import get_blockchain_service
-
-# Context variable to store wallet address for x402 payments
-_wallet_address_ctx: ContextVar[Optional[str]] = ContextVar('wallet_address', default=None)
-
-
-def set_wallet_address(wallet_address: Optional[str]) -> None:
-    """Set wallet address in context for x402 payments."""
-    _wallet_address_ctx.set(wallet_address)
-
-
-def get_wallet_address() -> Optional[str]:
-    """Get wallet address from context for x402 payments."""
-    return _wallet_address_ctx.get()
 
 
 async def verify_document(claim_id: str, document_path: str) -> Dict[str, Any]:
-    """
-    Verify a document (invoice, receipt, etc.).
-    
-    This tool calls the x402-protected /verifier/document endpoint.
-    Payment of $0.05 USDC is handled automatically.
-    
-    Args:
-        claim_id: Unique claim identifier
-        document_path: Path to the document file
-        
-    Returns:
-        {
-            "extracted_data": {...},
-            "valid": bool,
-            "verification_id": str
-        }
-    """
-    client = get_x402_client()
-    wallet_address = get_wallet_address()
-    
+    """Verify a document. Evaluations are free."""
     try:
-        result = await client.verify_document(claim_id, document_path, wallet_address=wallet_address)
+        result = await _verify_document(claim_id, document_path)
         return {
             "success": True,
             "extracted_data": result.get("extracted_data", {}),
             "valid": result.get("valid", False),
             "verification_id": result.get("verification_id"),
-            "cost": 0.05
-        }
-    except X402PaymentError as e:
-        return {
-            "success": False,
-            "error": f"Payment failed: {str(e)}",
-            "cost": 0.0
+            "cost": 0.0,
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "cost": 0.0
-        }
+        return {"success": False, "error": str(e), "cost": 0.0}
 
 
 async def verify_image(claim_id: str, image_path: str) -> Dict[str, Any]:
-    """
-    Analyze an image (damage photos, etc.).
-    
-    This tool calls the x402-protected /verifier/image endpoint.
-    Payment of $0.10 USDC is handled automatically.
-    
-    Args:
-        claim_id: Unique claim identifier
-        image_path: Path to the image file
-        
-    Returns:
-        {
-            "damage_assessment": {...},
-            "valid": bool,
-            "analysis_id": str
-        }
-    """
-    client = get_x402_client()
-    wallet_address = get_wallet_address()
-    
+    """Analyze an image. Evaluations are free."""
     try:
-        result = await client.verify_image(claim_id, image_path, wallet_address=wallet_address)
+        result = await _verify_image(claim_id, image_path)
         return {
             "success": True,
             "damage_assessment": result.get("damage_assessment", {}),
             "valid": result.get("valid", False),
             "analysis_id": result.get("analysis_id"),
-            "cost": 0.10
-        }
-    except X402PaymentError as e:
-        return {
-            "success": False,
-            "error": f"Payment failed: {str(e)}",
-            "cost": 0.0
+            "cost": 0.0,
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "cost": 0.0
-        }
+        return {"success": False, "error": str(e), "cost": 0.0}
 
 
 async def verify_fraud(claim_id: str) -> Dict[str, Any]:
-    """
-    Check for fraud indicators.
-    
-    This tool calls the x402-protected /verifier/fraud endpoint.
-    Payment of $0.05 USDC is handled automatically.
-    
-    Args:
-        claim_id: Unique claim identifier
-        
-    Returns:
-        {
-            "fraud_score": float,
-            "risk_level": str,
-            "check_id": str
-        }
-    """
-    client = get_x402_client()
-    wallet_address = get_wallet_address()
-    
+    """Check for fraud. Evaluations are free."""
     try:
-        result = await client.verify_fraud(claim_id, wallet_address=wallet_address)
+        result = await _verify_fraud(claim_id)
         return {
             "success": True,
             "fraud_score": result.get("fraud_score", 0.0),
             "risk_level": result.get("risk_level", "UNKNOWN"),
             "check_id": result.get("check_id"),
-            "cost": 0.05
-        }
-    except X402PaymentError as e:
-        return {
-            "success": False,
-            "error": f"Payment failed: {str(e)}",
-            "cost": 0.0
+            "cost": 0.0,
         }
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "cost": 0.0
-        }
+        return {"success": False, "error": str(e), "cost": 0.0}
 
 
 async def approve_claim(claim_id: str, amount: float, recipient: str) -> Dict[str, Any]:
-    """
-    Approve a claim and trigger USDC settlement on Arc.
-    
-    This tool calls the blockchain service to execute
-    ClaimEscrow.approveClaim() on Arc.
-    
-    Args:
-        claim_id: Unique claim identifier
-        amount: Amount to settle in USDC
-        recipient: Claimant wallet address
-        
-    Returns:
-        {
-            "tx_hash": str,
-            "status": str
-        }
-    """
+    """Approve a claim and trigger USDC settlement on Arc."""
     blockchain = get_blockchain_service()
-    
     try:
         tx_hash = await blockchain.approve_claim(
             claim_id=claim_id,
             amount=Decimal(str(amount)),
-            recipient=recipient
+            recipient=recipient,
         )
-        
         if tx_hash:
-            return {
-                "success": True,
-                "tx_hash": tx_hash,
-                "status": "SETTLED",
-                "amount": amount,
-                "recipient": recipient
-            }
-        else:
-            return {
-                "success": False,
-                "error": "Transaction failed",
-                "status": "FAILED"
-            }
+            return {"success": True, "tx_hash": tx_hash, "status": "SETTLED", "amount": amount, "recipient": recipient}
+        return {"success": False, "error": "Transaction failed", "status": "FAILED"}
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "status": "ERROR"
-        }
+        return {"success": False, "error": str(e), "status": "ERROR"}
 
 
-# Tool definitions for Google Agents Framework
+# Tool definitions for Google Agents Framework (costs removed; evaluations are free)
 TOOL_DEFINITIONS = [
     {
         "name": "verify_document",
-        "description": "Verify a document (invoice, receipt, etc.) for authenticity and extract data. Costs $0.05 USDC.",
+        "description": "Verify a document (invoice, receipt, etc.) for authenticity and extract data.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "claim_id": {
-                    "type": "string",
-                    "description": "Unique claim identifier"
-                },
-                "document_path": {
-                    "type": "string",
-                    "description": "Path to the document file"
-                }
-            },
-            "required": ["claim_id", "document_path"]
-        }
+            "properties": {"claim_id": {"type": "string"}, "document_path": {"type": "string"}},
+            "required": ["claim_id", "document_path"],
+        },
     },
     {
         "name": "verify_image",
-        "description": "Analyze an image (damage photos, etc.) to assess damage and validity. Costs $0.10 USDC.",
+        "description": "Analyze an image (damage photos, etc.) to assess damage and validity.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "claim_id": {
-                    "type": "string",
-                    "description": "Unique claim identifier"
-                },
-                "image_path": {
-                    "type": "string",
-                    "description": "Path to the image file"
-                }
-            },
-            "required": ["claim_id", "image_path"]
-        }
+            "properties": {"claim_id": {"type": "string"}, "image_path": {"type": "string"}},
+            "required": ["claim_id", "image_path"],
+        },
     },
     {
         "name": "verify_fraud",
-        "description": "Check for fraud indicators on a claim. Costs $0.05 USDC.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "claim_id": {
-                    "type": "string",
-                    "description": "Unique claim identifier"
-                }
-            },
-            "required": ["claim_id"]
-        }
+        "description": "Check for fraud indicators on a claim.",
+        "parameters": {"type": "object", "properties": {"claim_id": {"type": "string"}}, "required": ["claim_id"]},
     },
     {
         "name": "approve_claim",
-        "description": "Approve a claim and trigger USDC settlement on Arc blockchain. Only call if confidence >= 0.85.",
+        "description": "Approve a claim and trigger USDC settlement on Arc. Only call if confidence >= 0.85.",
         "parameters": {
             "type": "object",
-            "properties": {
-                "claim_id": {
-                    "type": "string",
-                    "description": "Unique claim identifier"
-                },
-                "amount": {
-                    "type": "number",
-                    "description": "Amount to settle in USDC"
-                },
-                "recipient": {
-                    "type": "string",
-                    "description": "Claimant wallet address"
-                }
-            },
-            "required": ["claim_id", "amount", "recipient"]
-        }
-    }
+            "properties": {"claim_id": {"type": "string"}, "amount": {"type": "number"}, "recipient": {"type": "string"}},
+            "required": ["claim_id", "amount", "recipient"],
+        },
+    },
 ]
