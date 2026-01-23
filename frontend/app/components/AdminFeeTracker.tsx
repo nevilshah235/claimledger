@@ -13,7 +13,17 @@ interface FeeBreakdown {
 
 interface FeeTrackingData {
   wallet_address: string | null;
-  current_balance: number | null;
+  current_balance: {
+    balances: Array<{
+      amount: string;
+      token: {
+        symbol: string;
+        name?: string;
+        decimals?: number;
+      };
+    }>;
+    wallet_id?: string;
+  } | null;
   total_spent: number;
   total_evaluations: number;
   average_cost_per_evaluation: number;
@@ -35,10 +45,13 @@ export function AdminFeeTracker() {
       // Log balance information for debugging
       if (data.current_balance === null) {
         console.warn('AdminFeeTracker: Balance is null - wallet may not be configured or balance fetch failed');
-      } else if (data.current_balance === 0) {
-        console.info('AdminFeeTracker: Balance is 0 - wallet has no funds');
       } else {
-        console.info(`AdminFeeTracker: Balance loaded: ${data.current_balance} USDC`);
+        const usdcBalance = extractUSDCBalance(data.current_balance);
+        if (usdcBalance === null) {
+          console.warn('AdminFeeTracker: No USDC balance found in balance data');
+        } else {
+          console.info(`AdminFeeTracker: Balance loaded: ${usdcBalance} USDC`);
+        }
       }
     } catch (err) {
       console.error('Failed to load fee data:', err);
@@ -55,6 +68,28 @@ export function AdminFeeTracker() {
     const interval = setInterval(loadFeeData, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Extract USDC balance from balance structure (same logic as WalletInfoModal)
+  // WalletInfoModal uses parseFloat(tb.amount) directly without decimal conversion
+  const extractUSDCBalance = (balance: FeeTrackingData['current_balance']): number | null => {
+    if (!balance || !balance.balances || balance.balances.length === 0) {
+      return null;
+    }
+    
+    // Find USDC token (USDC, USDC-TESTNET, etc.)
+    const usdcToken = balance.balances.find((tb) => {
+      const symbol = tb.token?.symbol?.toUpperCase() || '';
+      return symbol.includes('USDC');
+    });
+    
+    if (!usdcToken) {
+      return null;
+    }
+    
+    // Use amount directly (same as WalletInfoModal - "Show raw token amount, not decimal-adjusted")
+    // The amount from Circle API is already in the correct format
+    return parseFloat(usdcToken.amount || '0');
+  };
 
   const formatCurrency = (amount: number | null) => {
     if (amount === null) return 'N/A';
@@ -131,7 +166,7 @@ export function AdminFeeTracker() {
           <div className="bg-white/5 rounded-lg p-4 border border-white/10">
             <div className="text-xs admin-text-secondary mb-1">Wallet Balance</div>
             <div className="text-lg font-bold admin-text-primary">
-              {formatCurrency(feeData.current_balance)}
+              {formatCurrency(extractUSDCBalance(feeData.current_balance))}
             </div>
             {feeData.wallet_address ? (
               <div className="text-xs admin-text-secondary mt-1 truncate">
@@ -142,7 +177,7 @@ export function AdminFeeTracker() {
                 Wallet not configured
               </div>
             )}
-            {feeData.current_balance === null && (
+            {(!feeData.current_balance || extractUSDCBalance(feeData.current_balance) === null) && (
               <div className="text-xs text-amber-400/70 mt-1">
                 Balance unavailable
               </div>

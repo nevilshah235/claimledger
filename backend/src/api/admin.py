@@ -34,7 +34,7 @@ class FeeBreakdown(BaseModel):
 class FeeTrackingResponse(BaseModel):
     """Response model for fee tracking."""
     wallet_address: Optional[str]
-    current_balance: Optional[float]  # USDC balance from Gateway
+    current_balance: Optional[Dict[str, Any]] = None  # Balance data from Circle API (same format as /auth/wallet)
     total_spent: float  # Total spent across all evaluations
     total_evaluations: int  # Number of evaluations
     average_cost_per_evaluation: float
@@ -127,118 +127,59 @@ async def get_fee_tracking(
     if not current_user or current_user.role != "insurer":
         raise HTTPException(status_code=403, detail="Only insurers can access fee tracking")
     
-    # Get wallet address - prioritize ADMIN_WALLET_ADDRESS (used for agent operations)
-    # Otherwise fall back to user's wallet from database
-    admin_wallet_address = os.getenv("ADMIN_WALLET_ADDRESS")
-    wallet_address = None
+    # Use the same simple wallet lookup as /auth/wallet (which works correctly)
+    # This ensures consistency between "View Wallet" modal and "AI Evaluation Fees"
+    user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
     
-    if admin_wallet_address:
-        # Use ADMIN_WALLET_ADDRESS if configured (this is the wallet used for agent operations)
-        wallet_address = admin_wallet_address
-        logger.info(f"Using ADMIN_WALLET_ADDRESS for fee tracking: {wallet_address[:10]}...")
-    else:
-        # Fall back to user's wallet from database
-        user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
-        wallet_address = user_wallet.wallet_address if user_wallet else None
-        
-        if not wallet_address:
-            logger.warning(
-                f"Admin fee tracking: User {current_user.id} ({current_user.email}) has no wallet address configured"
-            )
-            return FeeTrackingResponse(
-                wallet_address=None,
-                current_balance=None,
-                total_spent=0.0,
-                total_evaluations=0,
-                average_cost_per_evaluation=0.0,
-                fee_breakdown=[]
-            )
+    if not user_wallet:
+        logger.warning(
+            f"Admin fee tracking: User {current_user.id} ({current_user.email}) has no wallet address configured"
+        )
+        return FeeTrackingResponse(
+            wallet_address=None,
+            current_balance=None,
+            total_spent=0.0,
+            total_evaluations=0,
+            average_cost_per_evaluation=0.0,
+            fee_breakdown=[]
+        )
     
-    # Get current balance from Circle Wallets API (same as wallet info modal)
-    # This shows the actual wallet balance, not Gateway balance
+    wallet_address = user_wallet.wallet_address
+    
+    # Get current balance from Circle Wallets API (same format as /auth/wallet)
+    # Return the full balance data structure, let frontend extract USDC balance
     circle_service = get_circle_wallets_service()
     current_balance = None
-    balance_float = None
     
     try:
-        # Find the UserWallet record to get circle_wallet_id
-        user_wallet = db.query(UserWallet).filter(
-            UserWallet.wallet_address == wallet_address
-        ).first()
-        
-        # If ADMIN_WALLET_ADDRESS is set but no UserWallet found, try using current user's wallet
-        # (in case they're the same address but ADMIN_WALLET_ADDRESS was set manually)
-        if not user_wallet and current_user:
-            user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
-            if user_wallet and user_wallet.wallet_address == wallet_address:
-                logger.info(
-                    f"Using current user's wallet record for ADMIN_WALLET_ADDRESS {wallet_address[:10]}..."
-                )
-        
-        if user_wallet and user_wallet.circle_wallet_id:
+        if user_wallet.circle_wallet_id and circle_service.api_key:
             logger.info(
                 f"Fetching Circle Wallets balance for wallet {wallet_address[:10]}... "
                 f"(Circle ID: {user_wallet.circle_wallet_id})"
             )
-            balance_data = await circle_service.get_wallet_balance(
-                user_wallet.circle_wallet_id,
-                chain="ARC"
-            )
-            
-            logger.info(f"Balance API response: {balance_data}")
-            
-            # Extract USDC balance from token balances
-            token_balances = balance_data.get("balances", [])
-            logger.info(f"Found {len(token_balances)} token balance(s) for wallet {wallet_address[:10]}...")
-            
-            if token_balances:
-                for tb in token_balances:
-                    token = tb.get("token", {})
-                    symbol = token.get("symbol", "").upper()
-                    amount_raw = tb.get("amount", "0")
-                    logger.info(
-                        f"Checking token: {symbol}, raw amount: {amount_raw}, "
-                        f"token data: {token}"
-                    )
-                    if "USDC" in symbol:
-                        # Amount is in raw units (6 decimals for USDC)
-                        decimals = token.get("decimals", 6)
-                        # Convert from raw units to decimal
-                        balance_float = float(amount_raw) / (10 ** decimals)
-                        logger.info(
-                            f"Circle Wallets balance fetched successfully: {balance_float} USDC "
-                            f"for wallet {wallet_address[:10]}... (raw: {amount_raw}, decimals: {decimals})"
-                        )
-                        break
-                
-                if balance_float is None:
-                    logger.warning(
-                        f"No USDC balance found in token balances for wallet {wallet_address[:10]}... "
-                        f"Available tokens: {[tb.get('token', {}).get('symbol', 'UNKNOWN') for tb in token_balances]}"
-                    )
-            else:
-                logger.warning(
-                    f"No token balances found for wallet {wallet_address[:10]}... "
-                    f"Balance data: {balance_data}"
+            try:
+                # Fetch balance from Circle API (same as /auth/wallet)
+                balance_data = await circle_service.get_wallet_balance(
+                    user_wallet.circle_wallet_id,
+                    chain="ARC"
                 )
-        else:
-            if not user_wallet:
-                logger.warning(
-                    f"No UserWallet record found for wallet {wallet_address[:10]}... - "
-                    "cannot fetch balance from Circle Wallets API"
-                )
-            elif not user_wallet.circle_wallet_id:
-                logger.warning(
-                    f"UserWallet record exists for {wallet_address[:10]}... but circle_wallet_id is missing - "
-                    "cannot fetch balance from Circle Wallets API"
-                )
+                logger.info(f"Balance data received: {balance_data}")
+                # Return full balance data structure (same as /auth/wallet)
+                current_balance = balance_data
+            except Exception as e:
+                logger.error(f"Could not fetch balance from Circle: {e}", exc_info=True)
+                # Return empty balance structure on error (same as /auth/wallet)
+                current_balance = {
+                    "balances": [],
+                    "wallet_id": user_wallet.circle_wallet_id
+                }
     except Exception as e:
         logger.error(
-            f"Failed to fetch Circle Wallets balance for wallet {wallet_address[:10]}...: {e}",
+            f"Error in balance fetching logic for wallet {wallet_address[:10]}...: {e}",
             exc_info=True
         )
-        # Continue without balance - don't fail the entire request
-        balance_float = None
+        # Balance fetch is optional, continue without it
+        current_balance = None
     
     # Query X402Receipts to calculate spending
     # Note: We need to track which receipts belong to this insurer's evaluations
@@ -285,7 +226,7 @@ async def get_fee_tracking(
     
     return FeeTrackingResponse(
         wallet_address=wallet_address,
-        current_balance=balance_float,
+        current_balance=current_balance,
         total_spent=total_spent,
         total_evaluations=total_evaluations,
         average_cost_per_evaluation=average_cost,
