@@ -1,7 +1,7 @@
 [project]
 name = "claimledger-backend"
 version = "0.1.0"
-description = "ClaimLedger backend - Agentic insurance claims with x402 micropayments"
+description = "ClaimLedger backend - Agentic insurance claims (evaluations free; USDC settlement on Arc)"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.104.0",
@@ -22,6 +22,7 @@ dependencies = [
     "python-dateutil>=2.8.2",  # Date utilities
     "pycryptodome>=3.19.0",  # RSA encryption for entity secret
     "pydantic[email]>=2.5.0",  # Email validation
+    "web3>=6.0.0",  # RPC eth_call for allowance, getEscrowBalance (read-only)
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,10 @@ dev = [
     "pytest-cov>=4.1.0",
     "black>=23.11.0",
     "ruff>=0.1.6",
+]
+# For register_entity_secret.py --sdk (circle.web3.utils.register_entity_secret_ciphertext)
+circle = [
+    "circle-developer-controlled-wallets",
 ]
 
 [build-system]
