@@ -266,6 +266,25 @@ export const api = {
       return fetchAPI<WalletInfo>('/auth/wallet');
     },
 
+    // Admin auto-login
+    adminLogin: async (): Promise<LoginResponse> => {
+      const response = await fetchAPI<LoginResponse>('/auth/admin/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      // Store token
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', response.access_token);
+        localStorage.setItem('user_id', response.user_id);
+        localStorage.setItem('user_role', response.role);
+      }
+      
+      return response;
+    },
+
     // Legacy Circle endpoints (deprecated, kept for backward compatibility)
     initCircle: async (userId?: string): Promise<{
       user_id: string;
