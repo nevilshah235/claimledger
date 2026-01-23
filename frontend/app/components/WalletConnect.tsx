@@ -98,7 +98,7 @@ export function WalletConnect({ onConnect, onDisconnect, address, role }: Wallet
         size="sm"
         onClick={() => setIsModalOpen(true)}
       >
-        {authRole === 'insurer' ? 'Login as Insurer' : 'Login as Claimant'}
+        {authRole === 'insurer' ? 'Log in as Administrator' : 'Log in as Claimant'}
       </Button>
 
       <AuthModal

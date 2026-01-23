@@ -73,12 +73,12 @@ export function SummaryCard({
   const decisionLabel = DECISION_LABELS[decisionKey] || 'Unknown';
 
   return (
-    <Card className="p-6">
+    <Card className="p-6 admin-card">
       {/* Confidence Score */}
       {confidence !== null && (
         <div className="mb-6">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-slate-400">AI Confidence</span>
+            <span className="text-sm admin-text-secondary">AI Confidence</span>
             <div className="flex items-center gap-2">
               <span className={`text-2xl font-bold ${getConfidenceColor(confidence)}`}>
                 {confidencePercent}%
@@ -88,7 +88,7 @@ export function SummaryCard({
                 title={`Confidence threshold: ${getConfidenceThreshold(confidence)}`}
               >
                 <svg
-                  className="w-4 h-4 text-slate-400"
+                  className="w-4 h-4 admin-text-secondary"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -119,7 +119,7 @@ export function SummaryCard({
               style={{ width: `${confidencePercent}%` }}
             />
           </div>
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-xs admin-text-secondary mt-1">
             {getConfidenceThreshold(confidence)}
           </p>
         </div>
@@ -142,7 +142,7 @@ export function SummaryCard({
       {/* Summary Text */}
       {summary && (
         <div className="mb-4 prose prose-invert prose-sm max-w-none">
-          <div className="text-sm text-slate-300 leading-relaxed markdown-content">
+          <div className="text-sm admin-text-primary leading-relaxed markdown-content">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
@@ -175,10 +175,10 @@ export function SummaryCard({
       )}
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-2 gap-4 pt-4 border-t border-slate-700">
+      <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10">
         {approvedAmount !== null && approvedAmount !== undefined && (
           <div>
-            <p className="text-xs text-slate-400 mb-1">Approved Amount</p>
+            <p className="text-xs admin-text-secondary mb-1">Approved Amount</p>
             <p className="text-lg font-bold text-emerald-400">
               ${approvedAmount.toFixed(2)} USDC
             </p>
@@ -186,7 +186,7 @@ export function SummaryCard({
         )}
         {processingCosts !== null && processingCosts !== undefined && (
           <div>
-            <p className="text-xs text-slate-400 mb-1">Processing Cost</p>
+            <p className="text-xs admin-text-secondary mb-1">Processing Cost</p>
             <p className="text-lg font-bold text-cyan-400">
               ${processingCosts.toFixed(2)} USDC
             </p>

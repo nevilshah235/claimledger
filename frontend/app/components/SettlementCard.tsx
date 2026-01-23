@@ -9,9 +9,16 @@ import { api } from '@/lib/api';
 interface SettlementCardProps {
   claim: Claim;
   onSettle: (claim: Claim) => void;
+  settlementsEnabled?: boolean;
+  onRequireEnableSettlements?: () => void;
 }
 
-export function SettlementCard({ claim, onSettle }: SettlementCardProps) {
+export function SettlementCard({
+  claim,
+  onSettle,
+  settlementsEnabled = true,
+  onRequireEnableSettlements,
+}: SettlementCardProps) {
   const [settling, setSettling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,6 +27,13 @@ export function SettlementCard({ claim, onSettle }: SettlementCardProps) {
     setError(null);
 
     try {
+      if (!settlementsEnabled) {
+        setSettling(false);
+        setError('Enable settlements to proceed.');
+        onRequireEnableSettlements?.();
+        return;
+      }
+
       const result = await api.blockchain.settle(claim.id);
       
       // Fetch updated claim
@@ -46,14 +60,14 @@ export function SettlementCard({ claim, onSettle }: SettlementCardProps) {
   const canSettle = claim.status === 'APPROVED' && claim.approved_amount;
 
   return (
-    <Card hover className="border border-white/10">
+    <Card hover className="border border-white/10 admin-card">
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <CardTitle className="text-lg">#{claim.id.slice(0, 8)}</CardTitle>
+            <CardTitle className="text-lg admin-text-primary">#{claim.id.slice(0, 8)}</CardTitle>
             <Badge status={claim.status} />
           </div>
-          <span className="text-lg font-bold text-white">
+          <span className="text-lg font-bold admin-text-primary">
             {formatCurrency(claim.claim_amount)}
           </span>
         </div>
@@ -62,15 +76,15 @@ export function SettlementCard({ claim, onSettle }: SettlementCardProps) {
       <CardContent className="space-y-4">
         {/* Claimant */}
         <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-400">Claimant</span>
-          <span className="font-mono text-white">{formatAddress(claim.claimant_address)}</span>
+          <span className="admin-text-secondary">Claimant</span>
+          <span className="font-mono admin-text-primary">{formatAddress(claim.claimant_address)}</span>
         </div>
 
         {/* AI Decision */}
         {claim.decision && (
           <div className="p-3 rounded-lg bg-white/5">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-slate-400">AI Decision</span>
+              <span className="text-sm admin-text-secondary">AI Decision</span>
               <span className={`text-sm font-medium ${
                 claim.decision === 'APPROVED' ? 'text-emerald-400' :
                 claim.decision === 'REJECTED' ? 'text-red-400' : 'text-amber-400'
@@ -83,12 +97,12 @@ export function SettlementCard({ claim, onSettle }: SettlementCardProps) {
             {claim.confidence !== null && (
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500">Confidence</span>
-                  <span className="text-slate-300">{Math.round(claim.confidence * 100)}%</span>
+                  <span className="admin-text-secondary">Confidence</span>
+                  <span className="admin-text-primary">{Math.round(claim.confidence * 100)}%</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
                   <div 
-                    className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-400"
+                    className="h-full rounded-full bg-primary"
                     style={{ width: `${claim.confidence * 100}%` }}
                   />
                 </div>
@@ -100,7 +114,7 @@ export function SettlementCard({ claim, onSettle }: SettlementCardProps) {
         {/* Approved Amount */}
         {claim.approved_amount && (
           <div className="flex items-center justify-between">
-            <span className="text-sm text-slate-400">Approved Amount</span>
+            <span className="text-sm admin-text-secondary">Approved Amount</span>
             <span className="text-lg font-bold text-emerald-400">
               {formatCurrency(claim.approved_amount)} USDC
             </span>
@@ -133,7 +147,7 @@ export function SettlementCard({ claim, onSettle }: SettlementCardProps) {
         {/* Processing Cost */}
         {claim.processing_costs && (
           <div className="flex items-center justify-between text-sm">
-            <span className="text-slate-400">Processing Cost</span>
+            <span className="admin-text-secondary">Processing Cost</span>
             <span className="text-cyan-400">{formatCurrency(claim.processing_costs)} USDC</span>
           </div>
         )}
@@ -149,13 +163,19 @@ export function SettlementCard({ claim, onSettle }: SettlementCardProps) {
       {/* Settle Button */}
       {canSettle && (
         <CardFooter>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs admin-text-secondary">Settlement</span>
+            <span className="text-xs px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300">
+              Network fee covered
+            </span>
+          </div>
           <Button
             variant="success"
             className="w-full"
             onClick={handleSettle}
             loading={settling}
           >
-            {settling ? 'Processing...' : `Settle Claim - Pay ${formatCurrency(claim.approved_amount!)} USDC`}
+            {settling ? 'Processing…' : `Confirm settlement (${formatCurrency(claim.approved_amount!)} USDC)`}
           </Button>
         </CardFooter>
       )}

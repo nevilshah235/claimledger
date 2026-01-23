@@ -15,10 +15,10 @@ import { api } from '@/lib/api';
 interface ClaimStatusProps {
   claim: Claim;
   onUpdate: (claim: Claim) => void;
+  autoStartEvaluation?: boolean;
 }
 
-export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
-  const [evaluating, setEvaluating] = useState(false);
+export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: ClaimStatusProps) {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'summary' | 'detailed'>('summary');
   const [evaluationResult, setEvaluationResult] = useState<EvaluationResult | null>(null);
@@ -113,40 +113,29 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
     return steps;
   };
 
-  const handleEvaluate = async () => {
-    setEvaluating(true);
+  // Auto-start evaluation on submit (plan requirement)
+  useEffect(() => {
+    if (!autoStartEvaluation) return;
+    if (claim.status !== 'SUBMITTED') return;
+
     setError(null);
-    setShowProgress(true); // Show progress immediately
+    setShowProgress(true);
 
-    try {
-      // Immediately update local state to show EVALUATING status
-      // This ensures the progress component appears right away
-      const evaluatingClaim = { ...claim, status: 'EVALUATING' as const };
-      onUpdate(evaluatingClaim);
+    // Optimistically update UI
+    onUpdate({ ...claim, status: 'EVALUATING' as any });
 
-      // Trigger evaluation asynchronously (don't wait for it)
-      // The progress component will poll for updates
-      api.agent.evaluate(claim.id)
-        .then((result) => {
-          setEvaluationResult(result);
-          // Poll will pick up the status change
-        })
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : 'Evaluation failed');
-          // Reset to previous status on error
-          onUpdate(claim);
-          setShowProgress(false);
-          setEvaluating(false);
-        });
-      
-      // Keep progress showing - it will be hidden when status changes
-      // The EvaluationProgress component will call onComplete when done
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start evaluation');
-      setShowProgress(false);
-      setEvaluating(false);
-    }
-  };
+    api.agent
+      .evaluate(claim.id)
+      .then((result) => {
+        setEvaluationResult(result);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Evaluation failed');
+        onUpdate(claim);
+        setShowProgress(false);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStartEvaluation, claim.id]);
 
   const handleEvaluationComplete = async () => {
     // Refresh claim data when evaluation completes
@@ -154,32 +143,11 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
       const updatedClaim = await api.claims.get(claim.id);
       onUpdate(updatedClaim);
       setShowProgress(false);
-      setEvaluating(false);
     } catch (err) {
       console.error('Failed to refresh claim:', err);
       setShowProgress(false);
-      setEvaluating(false);
     }
   };
-
-  // Poll for updates when evaluating
-  useEffect(() => {
-    if (claim.status === 'EVALUATING') {
-      const interval = setInterval(async () => {
-        try {
-          const updatedClaim = await api.claims.get(claim.id);
-          if (updatedClaim.status !== 'EVALUATING') {
-            clearInterval(interval);
-            onUpdate(updatedClaim);
-          }
-        } catch (err) {
-          console.error('Failed to poll claim status:', err);
-        }
-      }, 2000);
-
-      return () => clearInterval(interval);
-    }
-  }, [claim.status, claim.id, onUpdate]);
 
   const formatAddress = (address: string) => {
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -211,7 +179,7 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
             <p className="text-sm text-slate-400">Claim Amount</p>
             <p className="text-2xl font-bold text-white">
               {formatCurrency(claim.claim_amount)}
-              <span className="text-sm font-normal text-cyan-400 ml-2">USDC</span>
+              <span className="text-sm font-normal text-slate-300 ml-2">USDC</span>
             </p>
           </div>
           <div>
@@ -229,12 +197,12 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
 
         {/* View Toggle (when evaluated) */}
         {claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING' && (
-          <div className="flex items-center gap-2 p-1 rounded-lg bg-slate-800/50 w-fit">
+          <div className="flex items-center gap-2 p-1 rounded-lg bg-white/5 border border-white/10 w-fit">
             <button
               onClick={() => setViewMode('summary')}
               className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
                 viewMode === 'summary'
-                  ? 'bg-cyan-500 text-white'
+                  ? 'bg-primary text-white'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -244,7 +212,7 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
               onClick={() => setViewMode('detailed')}
               className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
                 viewMode === 'detailed'
-                  ? 'bg-cyan-500 text-white'
+                  ? 'bg-primary text-white'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
@@ -349,7 +317,12 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
           <DataRequestCard
             claimId={claim.id}
             requestedData={claim.requested_data}
-            onFilesUploaded={handleEvaluationComplete}
+            onFilesUploaded={async () => {
+              // Evidence uploaded triggers evaluation restart in DataRequestCard.
+              // Keep progress visible and refresh claim state.
+              setShowProgress(true);
+              onUpdate({ ...claim, status: 'EVALUATING' as any });
+            }}
           />
         )}
 
@@ -368,22 +341,6 @@ export function ClaimStatus({ claim, onUpdate }: ClaimStatusProps) {
           </div>
         )}
       </CardContent>
-
-      {/* Actions */}
-      {(claim.status === 'SUBMITTED' || claim.status === 'AWAITING_DATA') && (
-        <CardFooter>
-          <Button
-            className="w-full"
-            onClick={handleEvaluate}
-            loading={evaluating}
-          >
-            {evaluating ? 'Evaluating...' : 'Trigger AI Evaluation'}
-          </Button>
-          <p className="text-xs text-slate-400 text-center mt-2">
-            This will cost ~$0.35 USDC in x402 micropayments
-          </p>
-        </CardFooter>
-      )}
 
       {/* Timestamp */}
       <div className="px-6 pb-4">
