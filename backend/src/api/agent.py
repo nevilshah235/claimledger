@@ -6,6 +6,7 @@ Uses Google Agents Framework with Gemini for claim evaluation.
 """
 
 import uuid
+import os
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List, Dict, Any
@@ -91,6 +92,16 @@ class EvaluationRequest(BaseModel):
     """Request model for evaluation trigger."""
     # Optional parameters for evaluation
     pass
+
+
+class ChatRequest(BaseModel):
+    message: str
+    role: Optional[str] = None  # claimant|insurer
+    claim_id: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    reply: str
 
 
 @router.post("/evaluate/{claim_id}", response_model=EvaluationResponse)
@@ -512,6 +523,87 @@ async def get_agent_logs(
         claim_id=str(claim_id),
         logs=logs_list
     )
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_assistant(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Lightweight AI chat assistant endpoint.
+
+    - If GOOGLE_AI_API_KEY/GOOGLE_API_KEY is configured, uses Gemini to answer.
+    - Otherwise returns a deterministic, helpful fallback response (demo-friendly).
+    """
+    role = (request.role or "user").strip()
+    message = (request.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    claim_context = None
+    if request.claim_id:
+        claim = db.query(Claim).filter(Claim.id == request.claim_id).first()
+        if claim:
+            claim_context = {
+                "id": claim.id,
+                "status": claim.status,
+                "decision": claim.decision,
+                "confidence": float(claim.confidence) if claim.confidence else None,
+                "approved_amount": float(claim.approved_amount) if claim.approved_amount else None,
+                "requested_data": claim.requested_data,
+                "description": getattr(claim, "description", None),
+            }
+
+    api_key = os.getenv("GOOGLE_AI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        if claim_context:
+            reply = (
+                f"Claim {claim_context['id'][:8]} is currently {claim_context['status']}. "
+                "If it needs info, upload the requested evidence; if it’s approved, you can settle it."
+            )
+        else:
+            reply = (
+                "I can help: submit a claim → evaluation runs → you may be asked for more evidence → "
+                "insurer reviews and settles approved claims."
+            )
+        return ChatResponse(reply=reply)
+
+    try:
+        import google.genai as genai
+
+        client = genai.Client(api_key=api_key)
+        model_name = os.getenv("AGENT_MODEL", "gemini-2.0-flash")
+
+        context_block = ""
+        if claim_context:
+            context_block = f"\n\nClaim context (authoritative):\n{claim_context}\n"
+
+        system = (
+            "You are UClaim's in-product assistant. "
+            "Be concise, accurate, and role-aware. "
+            "Avoid crypto jargon; say 'enable settlements' instead of 'connect wallet'. "
+            "Never claim you moved funds. "
+            "If you are unsure, ask the user what they see on screen."
+        )
+
+        prompt = f"{system}\n\nRole: {role}\nUser message: {message}{context_block}"
+
+        aio_client = client.aio
+        response = await aio_client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+        )
+
+        text = getattr(response, "text", None)
+        if text:
+            return ChatResponse(reply=text.strip())
+        if getattr(response, "candidates", None):
+            cand = response.candidates[0]
+            return ChatResponse(reply=cand.content.parts[0].text.strip())
+        return ChatResponse(reply=str(response))
+    except Exception as e:
+        return ChatResponse(reply=f"I couldn't reach the AI model right now. ({type(e).__name__})")
 
 
 def _convert_tool_results_to_agent_results(tool_results: Dict[str, Any]) -> Dict[str, Any]:

@@ -28,6 +28,7 @@ class ClaimResponse(BaseModel):
     id: str
     claimant_address: str
     claim_amount: float
+    description: Optional[str] = None
     status: str
     decision: Optional[str] = None
     confidence: Optional[float] = None
@@ -48,9 +49,20 @@ class ClaimCreateResponse(BaseModel):
     status: str
 
 
+class RequestDataBody(BaseModel):
+    requested_data: List[str]
+
+
+class OverrideDecisionBody(BaseModel):
+    decision: str
+    approved_amount: Optional[float] = None
+    summary: Optional[str] = None
+
+
 @router.post("", response_model=ClaimCreateResponse)
 async def create_claim(
     claim_amount: float = Form(...),
+    description: str = Form(""),
     files: List[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -86,6 +98,7 @@ async def create_claim(
         id=claim_id,
         claimant_address=user_wallet.wallet_address,
         claim_amount=Decimal(str(claim_amount)),
+        description=description or None,
         status="SUBMITTED",
         processing_costs=Decimal("0"),
         created_at=datetime.utcnow()
@@ -201,6 +214,7 @@ async def list_claims(
             id=str(claim.id),
             claimant_address=claim.claimant_address,
             claim_amount=float(claim.claim_amount),
+            description=getattr(claim, "description", None),
             status=claim.status,
             decision=claim.decision,
             confidence=float(claim.confidence) if claim.confidence else None,
@@ -266,6 +280,7 @@ async def get_claim(
         id=str(claim.id),
         claimant_address=claim.claimant_address,
         claim_amount=float(claim.claim_amount),
+        description=getattr(claim, "description", None),
         status=claim.status,
         decision=claim.decision,
         confidence=float(claim.confidence) if claim.confidence else None,
@@ -275,4 +290,187 @@ async def get_claim(
         requested_data=claim.requested_data if hasattr(claim, 'requested_data') else None,
         human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
         created_at=claim.created_at
+    )
+
+
+@router.post("/{claim_id}/request-data", response_model=ClaimResponse)
+async def request_additional_data(
+    claim_id: str,
+    body: RequestDataBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Insurer requests additional evidence/info for a claim."""
+    if current_user.role != "insurer":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only insurers can request data")
+
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    claim.requested_data = body.requested_data
+    claim.status = "AWAITING_DATA"
+    db.commit()
+    db.refresh(claim)
+
+    return ClaimResponse(
+        id=str(claim.id),
+        claimant_address=claim.claimant_address,
+        claim_amount=float(claim.claim_amount),
+        description=getattr(claim, "description", None),
+        status=claim.status,
+        decision=claim.decision,
+        confidence=float(claim.confidence) if claim.confidence else None,
+        approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
+        processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
+        tx_hash=claim.tx_hash,
+        requested_data=claim.requested_data,
+        human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
+        created_at=claim.created_at,
+    )
+
+
+@router.post("/{claim_id}/override-decision", response_model=ClaimResponse)
+async def override_decision(
+    claim_id: str,
+    body: OverrideDecisionBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Insurer overrides AI decision (manual adjudication)."""
+    if current_user.role != "insurer":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only insurers can override decisions")
+
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    claim.decision = body.decision
+    if body.approved_amount is not None:
+        claim.approved_amount = Decimal(str(body.approved_amount))
+    if body.summary is not None:
+        claim.comprehensive_summary = body.summary
+
+    # Best-effort status mapping
+    if body.decision in ("APPROVED", "AUTO_APPROVED", "APPROVED_WITH_REVIEW"):
+        claim.status = "APPROVED"
+    elif body.decision in ("NEEDS_MORE_DATA", "INSUFFICIENT_DATA"):
+        claim.status = "AWAITING_DATA"
+    elif body.decision in ("REJECTED",):
+        claim.status = "REJECTED"
+    else:
+        claim.status = "NEEDS_REVIEW"
+
+    db.commit()
+    db.refresh(claim)
+
+    return ClaimResponse(
+        id=str(claim.id),
+        claimant_address=claim.claimant_address,
+        claim_amount=float(claim.claim_amount),
+        description=getattr(claim, "description", None),
+        status=claim.status,
+        decision=claim.decision,
+        confidence=float(claim.confidence) if claim.confidence else None,
+        approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
+        processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
+        tx_hash=claim.tx_hash,
+        requested_data=claim.requested_data if hasattr(claim, 'requested_data') else None,
+        human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
+        created_at=claim.created_at,
+    )
+
+
+@router.post("/{claim_id}/evidence", response_model=ClaimResponse)
+async def add_claim_evidence(
+    claim_id: str,
+    files: List[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Add additional evidence to an existing claim (for 'additional evidence requested' flow).
+
+    Claimants may only add evidence to their own claims.
+    """
+    if current_user.role != "claimant":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only claimants can add evidence")
+
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+    if not user_wallet or claim.claimant_address != user_wallet.wallet_address:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update your own claims")
+
+    # Store evidence files (same approach as create_claim)
+    backend_dir = Path(__file__).parent.parent.parent
+    uploads_dir = backend_dir / "uploads"
+    uploads_dir.mkdir(exist_ok=True, parents=True)
+
+    claim_dir = uploads_dir / claim_id
+    claim_dir.mkdir(exist_ok=True, parents=True)
+
+    for file in files:
+        if not file.filename:
+            continue
+
+        file_type = "document"
+        if file.content_type and file.content_type.startswith("image/"):
+            file_type = "image"
+
+        safe_filename = file.filename.replace("..", "").replace("/", "_").replace("\\", "_")
+        file_path = claim_dir / safe_filename
+
+        try:
+            file_content = await file.read()
+            with open(file_path, "wb") as f:
+                f.write(file_content)
+
+            absolute_path = str(file_path.absolute())
+            evidence = Evidence(
+                id=str(uuid.uuid4()),
+                claim_id=claim_id,
+                file_type=file_type,
+                file_path=absolute_path,
+                file_size=len(file_content),
+                mime_type=file.content_type,
+                created_at=datetime.utcnow(),
+            )
+            db.add(evidence)
+        except Exception as e:
+            print(f"Error saving file {file.filename}: {e}")
+            evidence = Evidence(
+                id=str(uuid.uuid4()),
+                claim_id=claim_id,
+                file_type=file_type,
+                file_path=f"uploads/{claim_id}/{file.filename}",
+                file_size=None,
+                mime_type=file.content_type,
+                processing_status="FAILED",
+                created_at=datetime.utcnow(),
+            )
+            db.add(evidence)
+
+    # Clear requested_data and return to submitted so evaluation can restart
+    claim.requested_data = None
+    claim.status = "SUBMITTED"
+    db.commit()
+    db.refresh(claim)
+
+    return ClaimResponse(
+        id=str(claim.id),
+        claimant_address=claim.claimant_address,
+        claim_amount=float(claim.claim_amount),
+        description=getattr(claim, "description", None),
+        status=claim.status,
+        decision=claim.decision,
+        confidence=float(claim.confidence) if claim.confidence else None,
+        approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
+        processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
+        tx_hash=claim.tx_hash,
+        requested_data=claim.requested_data,
+        human_review_required=claim.human_review_required if hasattr(claim, "human_review_required") else False,
+        created_at=claim.created_at,
     )
