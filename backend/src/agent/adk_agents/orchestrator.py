@@ -109,7 +109,6 @@ class ADKOrchestrator:
             }
             for e in evidence
         ]
-        
         # Helper to log activity if db is available
         def log(message: str, agent_type: str = "orchestrator", level: str = "INFO", metadata: Dict[str, Any] = None):
             if db:
@@ -126,7 +125,8 @@ class ADKOrchestrator:
         # Use orchestrator agent if available (autonomous tool-calling)
         if self.use_orchestrator_agent and self.orchestrator_agent.agent:
             try:
-                print(f"\n🎯 [ORCHESTRATOR] Starting autonomous evaluation for claim {claim.id}")
+                claim_id = claim.id
+                print(f"\n🎯 [ORCHESTRATOR] Starting autonomous evaluation for claim {claim_id}")
                 print(f"   └─ Mode: Orchestrator Agent (Autonomous Tool-Calling)")
                 print(f"   └─ Claim Amount: ${float(claim.claim_amount):,.2f}")
                 print(f"   └─ Evidence Files: {len(evidence_dicts)} ({', '.join([e.get('file_type', 'unknown') for e in evidence_dicts])})")
@@ -142,8 +142,18 @@ class ADKOrchestrator:
                     claim.id,
                     claim.claim_amount,
                     claim.claimant_address,
-                    evidence_dicts
+                    evidence_dicts,
+                    claim_description=claim.description or ""
                 )
+                
+                # When AUTO_APPROVED and not yet settled, trigger on-chain settlement for end-to-end demo
+                if result.get("decision") == "AUTO_APPROVED" and not result.get("auto_settled"):
+                    settlement_result = await self._auto_settle(claim, {})
+                    tx_hash = settlement_result.get("tx_hash")
+                    if tx_hash:
+                        result["auto_settled"] = True
+                        result["tx_hash"] = tx_hash
+                        print(f"   └─ ✅ Settlement triggered (AUTO_APPROVED): {tx_hash}")
                 
                 decision = result.get('decision', 'UNKNOWN')
                 confidence = result.get("confidence", 0.0)
@@ -724,10 +734,11 @@ Write as if explaining to a non-technical user."""
         reasoning_result: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Automatically settle approved claim."""
+        amount = claim.approved_amount if (claim.approved_amount is not None and claim.approved_amount > 0) else claim.claim_amount
         try:
             tx_hash = await self.blockchain.approve_claim(
                 claim_id=claim.id,
-                amount=claim.claim_amount,
+                amount=amount,
                 recipient=claim.claimant_address
             )
             return {"tx_hash": tx_hash}
@@ -849,6 +860,8 @@ CRITICAL REQUIREMENTS:
    - Internal system details (tool calls, agent names, "No tools were called")
 
 3. Write in plain language that a claimant or insurer can understand
+
+4. **The summary MUST match the decision.** If the decision is FRAUD_DETECTED or REJECTED, do NOT say the claim is approved or that no further information is needed. If the decision is NEEDS_MORE_DATA, INSUFFICIENT_DATA, or NEEDS_REVIEW, do NOT say the claim is approved or that no further information is needed. Only for APPROVED or Approved (pending review) may you state that the claim is approved.
 
 Claim Information (USE THIS EXACT INFORMATION):
 - Claim Amount: ${float(claim.claim_amount):,.2f}

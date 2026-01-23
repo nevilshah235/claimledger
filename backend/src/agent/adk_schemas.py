@@ -45,7 +45,7 @@ ORCHESTRATOR_SCHEMA = {
             "maximum": 1.0
         }
     },
-    "required": ["decision", "confidence", "reasoning", "tool_results", "requested_data", "human_review_required", "review_reasons"]
+    "required": ["decision", "confidence", "reasoning", "requested_data", "human_review_required", "review_reasons"]
 }
 
 # Document Agent Output Schema
