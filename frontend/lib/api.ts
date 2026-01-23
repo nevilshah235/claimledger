@@ -88,10 +88,14 @@ export const api = {
     // Create a new claim (uses authenticated user's wallet)
     create: async (data: {
       claim_amount: number;
+      description?: string;
       files?: File[];
     }): Promise<ClaimCreateResponse> => {
       const formData = new FormData();
       formData.append('claim_amount', data.claim_amount.toString());
+      if (data.description) {
+        formData.append('description', data.description);
+      }
       
       if (data.files) {
         data.files.forEach(file => {
@@ -116,6 +120,35 @@ export const api = {
       // For now, we'll handle it client-side or add later
       return fetchAPI<Claim[]>('/claims');
     },
+
+    requestData: async (claimId: string, requested_data: string[]): Promise<Claim> => {
+      return fetchAPI<Claim>(`/claims/${claimId}/request-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requested_data }),
+      });
+    },
+
+    overrideDecision: async (
+      claimId: string,
+      data: { decision: string; approved_amount?: number; summary?: string }
+    ): Promise<Claim> => {
+      return fetchAPI<Claim>(`/claims/${claimId}/override-decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+    },
+
+    addEvidence: async (claimId: string, files: File[]): Promise<Claim> => {
+      const formData = new FormData();
+      files.forEach((file) => formData.append('files', file));
+
+      return fetchAPI<Claim>(`/claims/${claimId}/evidence`, {
+        method: 'POST',
+        body: formData,
+      });
+    },
   },
 
   // Agent Evaluation
@@ -139,6 +172,14 @@ export const api = {
     // Get agent activity logs
     getLogs: async (claimId: string): Promise<AgentLogsResponse> => {
       return fetchAPI<AgentLogsResponse>(`/agent/logs/${claimId}`);
+    },
+
+    chat: async (data: { message: string; role?: string; claim_id?: string | null }): Promise<{ reply: string }> => {
+      return fetchAPI<{ reply: string }>('/agent/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
     },
   },
 
@@ -256,6 +297,34 @@ export const api = {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(data),
+      });
+    },
+
+    // Circle User-Controlled connect (Web SDK)
+    circleConnectInit: async (): Promise<{
+      available: boolean;
+      app_id?: string | null;
+      user_token?: string | null;
+      encryption_key?: string | null;
+      challenge_id?: string | null;
+      message?: string | null;
+    }> => {
+      return fetchAPI('/auth/circle/connect/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+    },
+
+    circleConnectComplete: async (): Promise<{
+      success: boolean;
+      wallet_address?: string | null;
+      circle_wallet_id?: string | null;
+    }> => {
+      return fetchAPI('/auth/circle/connect/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
       });
     },
   },
