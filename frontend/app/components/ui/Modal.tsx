@@ -33,7 +33,7 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
         <div 
           className={`
             relative w-full ${sizeStyles[size]}
-            glass-card
+            glass-card admin-card
             transform transition-all
             animate-in fade-in zoom-in-95 duration-200
           `}
@@ -42,12 +42,12 @@ export function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalPr
           {/* Header */}
           {title && (
             <div className="flex items-center justify-between mb-4 pb-4 border-b border-white/10">
-              <h2 className="text-xl font-semibold text-white">{title}</h2>
+              <h2 className="text-xl font-semibold admin-text-primary">{title}</h2>
               <button
                 onClick={onClose}
                 className="p-1 rounded-lg hover:bg-white/10 transition-colors"
               >
-                <svg className="w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-5 h-5 admin-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
