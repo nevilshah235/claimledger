@@ -82,7 +82,7 @@ export function LoginDropdown({
             {ROLE_OPTIONS.map((opt) => (
               <Link
                 key={opt.role}
-                href={`/login?role=${opt.role}`}
+                href="/"
                 role="menuitem"
                 className="block rounded-lg px-3 py-2 hover:bg-surface-muted transition-colors"
                 onClick={() => setOpen(false)}
