@@ -50,7 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     writeTokenToStorage(null);
     api.auth.logout();
     setState({ token: null, user: null, loading: false });
-    router.push('/login');
+    router.push('/');
   }, [router]);
 
   const refresh = useCallback(async (): Promise<UserInfo | null> => {
@@ -65,13 +65,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setState({ token, user: me, loading: false });
       return me;
     } catch (err: any) {
-      // Handle "User not found" or any 401 error - use existing logout function
-      // logout() already clears token, state, and redirects to /login
+      // Handle "User not found" or any 401 error
       writeTokenToStorage(null);
-      logout(); // Use existing logout function for proper cleanup
+      setState({ token: null, user: null, loading: false });
       return null;
     }
-  }, [logout]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -129,7 +128,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const role = (roleOverride ?? (state.user?.role as Role | undefined)) || null;
       if (role === 'insurer') router.push('/insurer');
       else if (role === 'claimant') router.push('/claimant');
-      else router.push('/login');
+      else router.push('/');
     },
     [router, state.user?.role]
   );

@@ -6,7 +6,7 @@ import pytest
 from fastapi import status
 
 
-def test_register_claimant(client, mock_developer_wallets_service):
+def test_register_claimant(client):
     """Test registering a new claimant."""
     response = client.post(
         "/auth/register",
@@ -26,7 +26,7 @@ def test_register_claimant(client, mock_developer_wallets_service):
     assert len(data["access_token"]) > 0
 
 
-def test_register_insurer(client, mock_developer_wallets_service):
+def test_register_insurer(client):
     """Test registering a new insurer."""
     response = client.post(
         "/auth/register",
@@ -147,7 +147,7 @@ def test_get_current_user_no_token(client):
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
-def test_get_wallet_info(client, auth_headers, test_claimant, mock_developer_wallets_service):
+def test_get_wallet_info(client, auth_headers, test_claimant):
     """Test getting wallet information."""
     response = client.get("/auth/wallet", headers=auth_headers)
     
