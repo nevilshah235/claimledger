@@ -251,3 +251,56 @@ class CircleWalletsService:
         response.raise_for_status()
         
         return response.json()["data"]["wallet"]
+    
+    async def get_wallet_balance(
+        self,
+        wallet_id: str,
+        chain: Optional[str] = "ARC"
+    ) -> Dict[str, Any]:
+        """
+        Get wallet balance from Circle API.
+        
+        Args:
+            wallet_id: Circle wallet ID
+            chain: Blockchain chain identifier (default: "ARC" for ARC-TESTNET)
+            
+        Returns:
+            Balance information with tokenBalances
+        """
+        if not self.api_key:
+            raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
+        
+        try:
+            response = await self.http_client.get(
+                f"{self.api_base_url}/wallets/{wallet_id}/balances",
+                params={"chain": chain}
+            )
+            response.raise_for_status()
+            data = response.json().get("data", {})
+            token_balances = data.get("tokenBalances", [])
+            
+            import logging
+            logging.info(f"Fetched balance for wallet {wallet_id}: {len(token_balances)} token(s)")
+            if token_balances:
+                for tb in token_balances:
+                    logging.info(f"  Token: {tb.get('token', {}).get('symbol', 'UNKNOWN')}, Amount: {tb.get('amount', '0')}")
+            
+            return {
+                "balances": token_balances,
+                "wallet_id": wallet_id
+            }
+        except httpx.HTTPStatusError as e:
+            # If endpoint doesn't exist or returns error, log and return empty balance
+            import logging
+            logging.warning(f"Could not fetch balance for wallet {wallet_id}: {e.response.status_code} - {e.response.text}")
+            return {
+                "balances": [],
+                "wallet_id": wallet_id
+            }
+        except Exception as e:
+            import logging
+            logging.error(f"Error fetching balance for wallet {wallet_id}: {e}")
+            return {
+                "balances": [],
+                "wallet_id": wallet_id
+            }
