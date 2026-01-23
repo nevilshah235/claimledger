@@ -9,9 +9,10 @@ import { WalletInfo } from '@/lib/types';
 interface WalletInfoModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onWalletNotFound?: () => void; // Callback when wallet is not found
 }
 
-export function WalletInfoModal({ isOpen, onClose }: WalletInfoModalProps) {
+export function WalletInfoModal({ isOpen, onClose, onWalletNotFound }: WalletInfoModalProps) {
   const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,10 +30,38 @@ export function WalletInfoModal({ isOpen, onClose }: WalletInfoModalProps) {
     try {
       const info = await api.auth.getWallet();
       setWalletInfo(info);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load wallet information');
-    } finally {
       setLoading(false);
+    } catch (err: any) {
+      const errorMessage = err.message || err.detail || 'Failed to load wallet information';
+      const statusCode = err.status || err.statusCode || (err.response?.status);
+      
+      // Check if error indicates wallet not found (404 or specific error messages)
+      const errorLower = errorMessage.toLowerCase();
+      const isWalletNotFound = statusCode === 404 ||
+                               errorLower.includes('wallet not found') ||
+                               errorLower.includes('not found for user') ||
+                               errorLower.includes('please create a wallet') ||
+                               errorLower.includes('http 404') ||
+                               errorLower.includes('404');
+      
+      setError(errorMessage);
+      setLoading(false);
+      
+      // If wallet not found, automatically trigger enable wallet flow
+      if (isWalletNotFound && onWalletNotFound) {
+        // Clear settlements enabled flag since wallet is confirmed missing
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('uclaim_settlements_enabled');
+        }
+        
+        // Close this modal and trigger enable wallet flow after a brief delay
+        setTimeout(() => {
+          onClose();
+          setTimeout(() => {
+            onWalletNotFound();
+          }, 200);
+        }, 300);
+      }
     }
   };
 
@@ -56,7 +85,7 @@ export function WalletInfoModal({ isOpen, onClose }: WalletInfoModalProps) {
       <div className="space-y-6">
         {/* Header with Circle and Arc logos */}
         <div className="flex items-center justify-center gap-4 pb-4 border-b border-white/10">
-          <div className="relative h-8 w-auto">
+          <div className="relative h-8 w-auto bg-white rounded-lg px-2 py-1 flex items-center">
             <Image
               src="/icons/circle-logo.png"
               alt="Circle"
@@ -90,14 +119,31 @@ export function WalletInfoModal({ isOpen, onClose }: WalletInfoModalProps) {
         {error && (
           <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30">
             <p className="text-sm text-red-400">{error}</p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={loadWalletInfo}
-              className="mt-3"
-            >
-              Retry
-            </Button>
+            <div className="flex gap-2 mt-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={loadWalletInfo}
+              >
+                Retry
+              </Button>
+              {(error.toLowerCase().includes('wallet not found') ||
+                error.toLowerCase().includes('not found for user') ||
+                error.toLowerCase().includes('please create a wallet')) && onWalletNotFound && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    onClose();
+                    setTimeout(() => {
+                      onWalletNotFound();
+                    }, 100);
+                  }}
+                >
+                  Enable Wallet
+                </Button>
+              )}
+            </div>
           </div>
         )}
 
@@ -121,10 +167,10 @@ export function WalletInfoModal({ isOpen, onClose }: WalletInfoModalProps) {
               </div>
             </div>
 
-            {/* Token Balances */}
+            {/* Balance */}
             <div className="space-y-2">
               <label className="text-xs font-semibold uppercase tracking-wide admin-text-secondary">
-                Token Balances
+                Balance
               </label>
               <div className="p-4 rounded-xl bg-gradient-to-r from-blue-cobalt/20 to-blue-navy/20 border border-blue-cobalt/30">
                 {walletInfo.balance && walletInfo.balance.balances && walletInfo.balance.balances.length > 0 ? (
@@ -135,6 +181,20 @@ export function WalletInfoModal({ isOpen, onClose }: WalletInfoModalProps) {
                       const symbol = tb.token?.symbol || 'Unknown';
                       const name = tb.token?.name || symbol;
                       
+                      // Get currency symbol based on token symbol
+                      const getCurrencySymbol = (sym: string) => {
+                        const upperSym = sym.toUpperCase();
+                        if (upperSym.includes('EURC') || upperSym.includes('EUR')) {
+                          return '€';
+                        }
+                        if (upperSym.includes('USDC') || upperSym.includes('USD')) {
+                          return '$';
+                        }
+                        return '';
+                      };
+                      
+                      const currencySymbol = getCurrencySymbol(symbol);
+                      
                       return (
                         <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-white/5 border border-white/10">
                           <div className="flex-1">
@@ -143,9 +203,9 @@ export function WalletInfoModal({ isOpen, onClose }: WalletInfoModalProps) {
                           </div>
                           <div className="text-right">
                             <div className="text-lg font-bold admin-text-primary">
-                              {amount.toLocaleString()}
+                              {currencySymbol}{amount.toLocaleString()}
                             </div>
-                            <div className="text-xs admin-text-secondary">tokens</div>
+                            <div className="text-xs admin-text-secondary">amount</div>
                           </div>
                         </div>
                       );

@@ -4,10 +4,12 @@ import { useState, useEffect } from 'react';
 import { Button } from './ui';
 import { api } from '@/lib/api';
 import { WalletInfo } from '@/lib/types';
+import { useAuth } from '../providers/AuthProvider';
 
 interface WalletDisplayProps {
   walletAddress?: string;
   onRefresh?: () => void;
+  role?: string;
 }
 
 /**
@@ -16,7 +18,11 @@ interface WalletDisplayProps {
  * Displays wallet information from backend (Developer-Controlled wallets).
  * No Circle SDK needed - all data comes from backend API.
  */
-export function WalletDisplay({ walletAddress, onRefresh }: WalletDisplayProps) {
+export function WalletDisplay({ walletAddress, onRefresh, role: roleProp }: WalletDisplayProps) {
+  const { role: authRole } = useAuth();
+  const role = roleProp || authRole;
+  const isAdmin = role === 'insurer';
+  
   const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,9 +52,13 @@ export function WalletDisplay({ walletAddress, onRefresh }: WalletDisplayProps) 
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10">
+      <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border ${
+        isAdmin 
+          ? 'bg-blue-cobalt/30 border-blue-cobalt/50 shadow-lg shadow-blue-cobalt/20' 
+          : 'bg-blue/30 border-blue/50 shadow-lg shadow-blue/20'
+      }`}>
         <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-        <span className="text-sm text-slate-400">Loading wallet...</span>
+        <span className="text-sm font-medium text-blue-200 font-quando">Loading wallet...</span>
       </div>
     );
   }
@@ -72,15 +82,29 @@ export function WalletDisplay({ walletAddress, onRefresh }: WalletDisplayProps) 
     return null;
   }
 
+  // Extract balance information
+  const balances = walletInfo?.balance?.balances || [];
+  const primaryBalance = balances[0];
+  const tokenSymbol = primaryBalance?.token?.symbol || 'USDC';
+  const rawAmount = primaryBalance?.amount || '0';
+
   return (
-    <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10">
-      <div className="w-2 h-2 rounded-full bg-emerald-400" />
-      <span className="text-sm font-medium text-white font-mono">
+    <div className={`flex items-center gap-2 px-4 py-2 rounded-xl backdrop-blur-sm border ${
+      isAdmin 
+        ? 'bg-blue-cobalt/30 border-blue-cobalt/50 shadow-lg shadow-blue-cobalt/20' 
+        : 'bg-blue/30 border-blue/50 shadow-lg shadow-blue/20'
+    }`}>
+      <div className={`w-2 h-2 rounded-full bg-emerald-400 ${
+        isAdmin 
+          ? 'shadow-md shadow-emerald-400/70' 
+          : 'shadow-sm shadow-emerald-400/50'
+      }`} />
+      <span className="text-sm font-medium text-blue-200 font-quando font-semibold">
         {truncateAddress(displayAddress)}
       </span>
-      {walletInfo?.balance && (
-        <span className="text-xs text-slate-400">
-          (Balance: {walletInfo.balance.balances?.[0]?.amount || '0'} USDC)
+      {primaryBalance && (
+        <span className="text-xs font-medium text-blue-300 font-quando">
+          (Balance: {rawAmount} {tokenSymbol})
         </span>
       )}
     </div>
