@@ -73,7 +73,7 @@ export function SummaryCard({
   const decisionLabel = DECISION_LABELS[decisionKey] || 'Unknown';
 
   return (
-    <Card className="p-6 admin-card">
+    <Card className="p-6 admin-card border-amber-500/20 bg-amber-500/5">
       {/* Confidence Score */}
       {confidence !== null && (
         <div className="mb-6">
@@ -175,24 +175,26 @@ export function SummaryCard({
       )}
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10">
-        {approvedAmount !== null && approvedAmount !== undefined && (
-          <div>
-            <p className="text-xs admin-text-secondary mb-1">Approved Amount</p>
-            <p className="text-lg font-bold text-emerald-400">
-              ${approvedAmount.toFixed(2)} USDC
-            </p>
-          </div>
-        )}
-        {processingCosts !== null && processingCosts !== undefined && (
-          <div>
-            <p className="text-xs admin-text-secondary mb-1">Processing Cost</p>
-            <p className="text-lg font-bold text-cyan-400">
-              ${processingCosts.toFixed(2)} USDC
-            </p>
-          </div>
-        )}
-      </div>
+      {(approvedAmount !== null || (processingCosts !== null && processingCosts !== undefined && processingCosts > 0)) && (
+        <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10">
+          {approvedAmount !== null && approvedAmount !== undefined && (
+            <div>
+              <p className="text-xs admin-text-secondary mb-1">Approved Amount</p>
+              <p className="text-lg font-bold text-emerald-400">
+                ${approvedAmount.toFixed(2)} USDC
+              </p>
+            </div>
+          )}
+          {processingCosts !== null && processingCosts !== undefined && processingCosts > 0 && (
+            <div>
+              <p className="text-xs admin-text-secondary mb-1">Processing Cost</p>
+              <p className="text-lg font-bold text-cyan-400">
+                ${processingCosts.toFixed(2)} USDC
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   );
 }

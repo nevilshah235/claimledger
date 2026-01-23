@@ -1,10 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, Button, Badge } from './ui';
 import { VerificationSteps } from './VerificationSteps';
 import { SummaryCard } from './SummaryCard';
-import { AgentResultsBreakdown } from './AgentResultsBreakdown';
 import { ReviewReasonsList } from './ReviewReasonsList';
 import { EvaluationProgress } from './EvaluationProgress';
 import { DataRequestCard } from './DataRequestCard';
@@ -20,10 +19,10 @@ interface ClaimStatusProps {
 
 export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: ClaimStatusProps) {
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'summary' | 'detailed'>('summary');
   const [evaluationResult, setEvaluationResult] = useState<EvaluationResult | null>(null);
   const [showProgress, setShowProgress] = useState(false);
   const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
+  const evaluationStartedRef = useRef<string | null>(null); // Track which claim ID has started evaluation
 
   // Fetch evaluation result when claim is evaluated and we don't have it yet
   useEffect(() => {
@@ -116,8 +115,28 @@ export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: Cl
   // Auto-start evaluation on submit (plan requirement)
   useEffect(() => {
     if (!autoStartEvaluation) return;
-    if (claim.status !== 'SUBMITTED') return;
+    
+    // If status is EVALUATING and we've already started evaluation, this is expected - do nothing
+    if (claim.status === 'EVALUATING' && evaluationStartedRef.current === claim.id) {
+      return;
+    }
+    
+    // Only evaluate if status is SUBMITTED and we haven't already started evaluation for this claim
+    if (claim.status !== 'SUBMITTED') {
+      // Reset ref if status changed to something other than SUBMITTED or EVALUATING
+      if (evaluationStartedRef.current === claim.id) {
+        evaluationStartedRef.current = null;
+      }
+      return;
+    }
+    
+    // Prevent duplicate evaluation calls for the same claim
+    if (evaluationStartedRef.current === claim.id) {
+      return;
+    }
 
+    // Mark that we've started evaluation for this claim
+    evaluationStartedRef.current = claim.id;
     setError(null);
     setShowProgress(true);
 
@@ -130,12 +149,16 @@ export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: Cl
         setEvaluationResult(result);
       })
       .catch((err) => {
+        // Reset ref on error so evaluation can be retried if needed
+        if (evaluationStartedRef.current === claim.id) {
+          evaluationStartedRef.current = null;
+        }
         setError(err instanceof Error ? err.message : 'Evaluation failed');
         onUpdate(claim);
         setShowProgress(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStartEvaluation, claim.id]);
+  }, [autoStartEvaluation, claim.id, claim.status]);
 
   const handleEvaluationComplete = async () => {
     // Refresh claim data when evaluation completes
@@ -164,28 +187,36 @@ export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: Cl
     return new Date(dateString).toLocaleString();
   };
 
+  // Determine if we should show human review alert (only when not in AWAITING_DATA status)
+  const showHumanReviewAlert = claim.human_review_required && 
+    claim.status !== 'AWAITING_DATA' && 
+    claim.status !== 'SUBMITTED' && 
+    claim.status !== 'EVALUATING';
+
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-4">
-          <CardTitle>Claim #{claim.id.slice(0, 8)}</CardTitle>
-          <Badge status={claim.status} />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <CardTitle>Claim #{claim.id.slice(0, 8)}</CardTitle>
+            <Badge status={claim.status} />
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Basic Info */}
-        <div className="grid grid-cols-2 gap-4">
+        {/* Basic Info - Always visible */}
+        <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-700">
           <div>
-            <p className="text-sm text-slate-400">Claim Amount</p>
+            <p className="text-sm text-slate-400 mb-1">Claim Amount</p>
             <p className="text-2xl font-bold text-white">
-              {formatCurrency(claim.claim_amount)}
+              {formatCurrency(claim.claim_amount || 0)}
               <span className="text-sm font-normal text-slate-300 ml-2">USDC</span>
             </p>
           </div>
           <div>
-            <p className="text-sm text-slate-400">Claimant</p>
-            <p className="text-sm font-mono text-white">
-              {formatAddress(claim.claimant_address)}
+            <p className="text-sm text-slate-400 mb-1">Claimant</p>
+            <p className="text-sm font-mono text-white break-all">
+              {claim.claimant_address ? formatAddress(claim.claimant_address) : 'N/A'}
             </p>
           </div>
         </div>
@@ -195,34 +226,27 @@ export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: Cl
           <EvaluationProgress claimId={claim.id} onComplete={handleEvaluationComplete} />
         )}
 
-        {/* View Toggle (when evaluated) */}
-        {claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING' && (
-          <div className="flex items-center gap-2 p-1 rounded-lg bg-white/5 border border-white/10 w-fit">
-            <button
-              onClick={() => setViewMode('summary')}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                viewMode === 'summary'
-                  ? 'bg-primary text-white'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Summary
-            </button>
-            <button
-              onClick={() => setViewMode('detailed')}
-              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                viewMode === 'detailed'
-                  ? 'bg-primary text-white'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Detailed
-            </button>
+        {/* Human Review Alert - Only show when not awaiting data */}
+        {showHumanReviewAlert && (
+          <div className="p-4 rounded-lg bg-orange-500/10 border border-orange-500/30">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-orange-400 mb-1">
+                  Human Review Required
+                </h3>
+                <p className="text-sm text-slate-300">
+                  This claim requires manual review by an insurer. You'll be notified once a decision has been made.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
         {/* Summary View */}
-        {viewMode === 'summary' && claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING' && (
+        {claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING' && (
           <>
             <SummaryCard
               confidence={claim.confidence}
@@ -230,7 +254,7 @@ export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: Cl
               summary={evaluationResult?.summary || null}
               approvedAmount={claim.approved_amount}
               processingCosts={claim.processing_costs}
-              humanReviewRequired={claim.human_review_required}
+              humanReviewRequired={false}
             />
 
             {/* Extracted Information Summary */}
@@ -302,14 +326,6 @@ export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: Cl
           </>
         )}
 
-        {/* Detailed View */}
-        {viewMode === 'detailed' && claim.status !== 'SUBMITTED' && claim.status !== 'EVALUATING' && (
-          <AgentResultsBreakdown
-            claimId={claim.id}
-            toolCalls={evaluationResult?.tool_calls}
-          />
-        )}
-
         {/* Data Request Card */}
         {(claim.status === 'AWAITING_DATA' || 
           claim.decision === 'NEEDS_MORE_DATA' || 
@@ -328,10 +344,20 @@ export function ClaimStatus({ claim, onUpdate, autoStartEvaluation = false }: Cl
 
         {/* Verification Steps - Only show steps that were actually used */}
         {getVerificationSteps().length > 0 && (
-          <VerificationSteps 
-            steps={getVerificationSteps()}
-            totalCost={claim.processing_costs || 0}
-          />
+          <div className="space-y-2">
+            <VerificationSteps 
+              steps={getVerificationSteps()}
+              totalCost={claim.processing_costs || 0}
+            />
+            {/* Clarify status when additional data is needed */}
+            {(claim.status === 'AWAITING_DATA' || 
+              claim.decision === 'NEEDS_MORE_DATA' || 
+              claim.decision === 'INSUFFICIENT_DATA') && (
+              <p className="text-xs text-slate-500 italic">
+                Initial verification steps completed, but additional evidence is needed to finalize the decision.
+              </p>
+            )}
+          </div>
         )}
 
         {/* Error */}

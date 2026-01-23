@@ -71,10 +71,20 @@ export function VerificationSteps({
       </div>
 
       {/* Total Cost */}
-      {allCompleted && (
-        <div className="flex items-center justify-between pt-2 border-t border-white/10">
-          <span className="text-sm text-slate-400">Processing Cost</span>
-          <span className="text-sm font-medium text-cyan-400">${totalCost.toFixed(2)} USDC</span>
+      {allCompleted && totalCost > 0 && (
+        <div className="flex items-center justify-between pt-3 border-t border-white/10">
+          <div>
+            <span className="text-sm text-slate-400">Total Processing Cost</span>
+            <p className="text-xs text-slate-500 mt-0.5">Charged for AI verification services</p>
+          </div>
+          <span className="text-sm font-semibold text-cyan-400">${totalCost.toFixed(2)} USDC</span>
+        </div>
+      )}
+      {allCompleted && totalCost === 0 && (
+        <div className="pt-3 border-t border-white/10">
+          <p className="text-xs text-slate-500 italic">
+            Processing costs will be calculated after evaluation completes.
+          </p>
         </div>
       )}
     </div>
