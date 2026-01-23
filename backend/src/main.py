@@ -2,9 +2,8 @@
 FastAPI application entry point.
 
 ClaimLedger API - Agentic insurance claims with:
-- Google Agents Framework for AI evaluation
-- x402 micropayments via Circle Gateway
-- USDC settlement on Arc blockchain
+- Google Agents Framework for AI evaluation (free)
+- USDC settlement on Arc via Circle Wallets
 """
 
 import asyncio
@@ -63,9 +62,8 @@ app = FastAPI(
     description="""
     Agentic insurance claims platform with:
     - Multimodal claim submission
-    - AI agent evaluation (Google Agents Framework + Gemini)
-    - x402 micropayments via Circle Gateway
-    - USDC settlement on Arc blockchain
+    - AI agent evaluation (Google Agents Framework + Gemini; evaluations free)
+    - USDC settlement on Arc via Circle Wallets
     """,
     version="0.1.0",
     docs_url="/docs",

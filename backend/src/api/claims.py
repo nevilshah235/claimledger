@@ -36,8 +36,12 @@ class ClaimResponse(BaseModel):
     approved_amount: Optional[float] = None
     processing_costs: Optional[float] = None
     tx_hash: Optional[str] = None
+    auto_settled: Optional[bool] = None
     requested_data: Optional[list] = None
     human_review_required: Optional[bool] = False
+    decision_overridden: Optional[bool] = False
+    review_reasons: Optional[list] = None  # Admin only; reasons for manual review
+    contradictions: Optional[list] = None  # Admin only; e.g. amount mismatches
     created_at: datetime
 
     class Config:
@@ -222,8 +226,12 @@ async def list_claims(
             approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
             processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
             tx_hash=claim.tx_hash,
+            auto_settled=getattr(claim, "auto_settled", None),
             requested_data=claim.requested_data if hasattr(claim, 'requested_data') else None,
             human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
+            decision_overridden=getattr(claim, 'decision_overridden', False),
+            review_reasons=getattr(claim, 'review_reasons', None),
+            contradictions=getattr(claim, 'contradictions', None),
             created_at=claim.created_at
         )
         for claim in claims
@@ -288,8 +296,12 @@ async def get_claim(
         approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
         processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
         tx_hash=claim.tx_hash,
+        auto_settled=getattr(claim, "auto_settled", None),
         requested_data=claim.requested_data if hasattr(claim, 'requested_data') else None,
         human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
+        decision_overridden=getattr(claim, 'decision_overridden', False),
+        review_reasons=getattr(claim, 'review_reasons', None),
+        contradictions=getattr(claim, 'contradictions', None),
         created_at=claim.created_at
     )
 
@@ -325,8 +337,12 @@ async def request_additional_data(
         approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
         processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
         tx_hash=claim.tx_hash,
+        auto_settled=getattr(claim, "auto_settled", None),
         requested_data=claim.requested_data,
         human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
+        decision_overridden=getattr(claim, 'decision_overridden', False),
+        review_reasons=getattr(claim, 'review_reasons', None),
+        contradictions=getattr(claim, 'contradictions', None),
         created_at=claim.created_at,
     )
 
@@ -347,6 +363,7 @@ async def override_decision(
         raise HTTPException(status_code=404, detail="Claim not found")
 
     claim.decision = body.decision
+    claim.decision_overridden = True
     if body.approved_amount is not None:
         claim.approved_amount = Decimal(str(body.approved_amount))
     if body.summary is not None:
@@ -376,8 +393,12 @@ async def override_decision(
         approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
         processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
         tx_hash=claim.tx_hash,
+        auto_settled=getattr(claim, "auto_settled", None),
         requested_data=claim.requested_data if hasattr(claim, 'requested_data') else None,
         human_review_required=claim.human_review_required if hasattr(claim, 'human_review_required') else False,
+        decision_overridden=getattr(claim, 'decision_overridden', False),
+        review_reasons=getattr(claim, 'review_reasons', None),
+        contradictions=getattr(claim, 'contradictions', None),
         created_at=claim.created_at,
     )
 
@@ -471,8 +492,69 @@ async def add_claim_evidence(
         approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
         processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
         tx_hash=claim.tx_hash,
+        auto_settled=getattr(claim, "auto_settled", None),
         requested_data=claim.requested_data,
         human_review_required=claim.human_review_required if hasattr(claim, "human_review_required") else False,
+        decision_overridden=getattr(claim, 'decision_overridden', False),
+        review_reasons=getattr(claim, 'review_reasons', None),
+        contradictions=getattr(claim, 'contradictions', None),
+        created_at=claim.created_at,
+    )
+
+
+@router.post("/{claim_id}/reset-evaluating", response_model=ClaimResponse)
+async def reset_evaluating(
+    claim_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Reset a claim stuck in EVALUATING back to SUBMITTED so evaluation can be retried.
+    Claimants may only reset their own claims.
+    """
+    if current_user.role != "claimant":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only claimants can reset their own evaluations")
+
+    try:
+        uuid.UUID(claim_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid claim ID format")
+
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+    if not user_wallet or claim.claimant_address != user_wallet.wallet_address:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You can only update your own claims")
+
+    if claim.status != "EVALUATING":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Claim is not stuck in EVALUATING (current status: {claim.status})",
+        )
+
+    claim.status = "SUBMITTED"
+    db.commit()
+    db.refresh(claim)
+
+    return ClaimResponse(
+        id=str(claim.id),
+        claimant_address=claim.claimant_address,
+        claim_amount=float(claim.claim_amount),
+        description=getattr(claim, "description", None),
+        status=claim.status,
+        decision=claim.decision,
+        confidence=float(claim.confidence) if claim.confidence else None,
+        approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
+        processing_costs=float(claim.processing_costs) if claim.processing_costs else None,
+        tx_hash=claim.tx_hash,
+        auto_settled=getattr(claim, "auto_settled", None),
+        requested_data=claim.requested_data if hasattr(claim, "requested_data") else None,
+        human_review_required=claim.human_review_required if hasattr(claim, "human_review_required") else False,
+        decision_overridden=getattr(claim, "decision_overridden", False),
+        review_reasons=getattr(claim, 'review_reasons', None),
+        contradictions=getattr(claim, 'contradictions', None),
         created_at=claim.created_at,
     )
 
