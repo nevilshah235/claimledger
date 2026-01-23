@@ -22,6 +22,7 @@ export interface Claim {
   id: string;
   claimant_address: string;
   claim_amount: number;
+  description?: string | null;
   status: ClaimStatus;
   decision: Decision | null;
   confidence: number | null;
