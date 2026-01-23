@@ -180,24 +180,26 @@ class CircleWalletsService:
         blockchains: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
-        Get wallets for a user using user ID.
-        
+        Developer-style API: GET /users/{user_id}/wallets (no X-User-Token).
+        For user-controlled wallets, prefer list_wallets(user_token) which uses
+        GET /wallets with X-User-Token.
+
         Args:
             user_id: Circle user ID
             blockchains: Optional list of blockchains to filter (e.g., ["ARC-TESTNET"])
-            
+
         Returns:
             List of wallet objects
         """
         import logging
-        
+
         if not self.api_key:
             raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
-        
+
         params = {}
         if blockchains:
             params["blockchains"] = ",".join(blockchains)
-        
+
         url = f"{self.api_base_url}/users/{user_id}/wallets"
         logging.info(f"Querying Circle API: GET {url} with params: {params}")
         
@@ -293,12 +295,14 @@ class CircleWalletsService:
         blockchains: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
-        Create a new wallet for a user.
-        
+        Create a new wallet (developer-style: POST /wallets with userId).
+        For user-controlled wallets, creation happens via /user/initialize + SDK;
+        this is for developer-controlled or legacy flows.
+
         Args:
             user_id: Circle user ID
             blockchains: List of blockchains (default: ["ARC-TESTNET"])
-            
+
         Returns:
             Wallet data including walletId and address
         """
@@ -322,25 +326,34 @@ class CircleWalletsService:
     async def get_wallet_balance(
         self,
         wallet_id: str,
-        chain: Optional[str] = "ARC"
+        chain: Optional[str] = "ARC",
+        user_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get wallet balance from Circle API.
-        
+
+        User-controlled wallets: pass user_token (from create_user_token) so
+        X-User-Token is sent; otherwise Circle may 403/404. Developer-controlled
+        wallets use only the Bearer token.
+
         Args:
             wallet_id: Circle wallet ID
             chain: Blockchain chain identifier (default: "ARC" for ARC-TESTNET)
-            
+            user_token: For user-controlled wallets, from create_user_token().
+                        Enables X-User-Token header required by GET /wallets/{id}/balances.
+
         Returns:
-            Balance information with tokenBalances
+            Balance information with tokenBalances (as "balances" in our response)
         """
         if not self.api_key:
             raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
-        
+
+        headers = {"X-User-Token": user_token} if user_token else {}
         try:
             response = await self.http_client.get(
                 f"{self.api_base_url}/wallets/{wallet_id}/balances",
-                params={"chain": chain}
+                params={"chain": chain},
+                headers=headers,
             )
             response.raise_for_status()
             data = response.json().get("data", {})
@@ -371,3 +384,129 @@ class CircleWalletsService:
                 "balances": [],
                 "wallet_id": wallet_id
             }
+
+    async def create_user_contract_execution_challenge(
+        self,
+        user_token: str,
+        wallet_id: str,
+        contract_address: str,
+        abi_function_signature: str,
+        abi_parameters: List[Any],
+        idempotency_key: Optional[str] = None,
+        fee_level: str = "MEDIUM",
+        blockchain: str = "ARC-TESTNET",
+    ) -> Dict[str, Any]:
+        """
+        Create a challenge for executing a smart contract from a user-controlled wallet.
+
+        Circle endpoint: POST /v1/w3s/user/transactions/contractExecution
+
+        Args:
+            user_token: Circle user token (from create_user_token).
+            wallet_id: Circle wallet ID (source of the transaction).
+            contract_address: Contract to call.
+            abi_function_signature: e.g. "approve(address,uint256)" or "depositEscrow(uint256,uint256)".
+            abi_parameters: List of parameters (strings, ints, addresses).
+            idempotency_key: UUID v4; generated if not provided.
+            fee_level: LOW, MEDIUM, or HIGH.
+            blockchain: e.g. "ARC-TESTNET".
+
+        Returns:
+            {"challengeId": str} from Circle. The frontend uses sdk.execute(challengeId, callback).
+        """
+        if not self.api_key:
+            raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
+
+        key = idempotency_key or str(uuid.uuid4())
+        body: Dict[str, Any] = {
+            "idempotencyKey": key,
+            "walletId": wallet_id,
+            "contractAddress": contract_address,
+            "abiFunctionSignature": abi_function_signature,
+            "abiParameters": abi_parameters,
+            "feeLevel": fee_level,
+            "blockchain": blockchain,
+        }
+
+        import logging
+        logging.info(
+            "Calling Circle create_user_contract_execution_challenge: contract=%s, fn=%s",
+            contract_address[:10] + "...",
+            abi_function_signature,
+        )
+
+        response = await self.http_client.post(
+            f"{self.api_base_url}/user/transactions/contractExecution",
+            headers={"X-User-Token": user_token},
+            json=body,
+        )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        return data
+
+    async def list_user_transactions(
+        self,
+        user_token: str,
+        wallet_ids: Optional[List[str]] = None,
+        operation: Optional[str] = None,
+        page_size: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        List user transactions (for fallback when SDK execute does not return transactionId).
+
+        Circle endpoint: GET /v1/w3s/transactions
+        Requires X-User-Token. Use walletIds, operation=CONTRACT_EXECUTION to find settlement txs.
+
+        Returns:
+            List of transaction objects (each has id, state, txHash, createDate, ...).
+        """
+        if not self.api_key:
+            raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
+        params: Dict[str, Any] = {"pageSize": page_size}
+        if wallet_ids:
+            params["walletIds"] = ",".join(wallet_ids)
+        if operation:
+            params["operation"] = operation
+        response = await self.http_client.get(
+            f"{self.api_base_url}/transactions",
+            headers={"X-User-Token": user_token},
+            params=params,
+        )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        return data.get("transactions") or []
+
+    async def get_user_transaction(
+        self, transaction_id: str, user_token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get a user transaction by ID (for /complete to resolve txHash).
+
+        Circle endpoint: GET /v1/w3s/transactions/{id}
+        (Not /user/transactions/{id} - List uses /transactions, Get uses the same base.)
+        Requires X-User-Token for user-controlled wallets.
+
+        Response: {"data": {"transaction": {...}}} -> we return the inner transaction.
+
+        Args:
+            transaction_id: Circle transaction ID (from SDK execute result or list;
+                do not pass challengeId).
+            user_token: Required for user-controlled wallets; enables X-User-Token.
+
+        Returns:
+            {"id": str, "state": str, "txHash": str | None, ...}
+        """
+        if not self.api_key:
+            raise ValueError("CIRCLE_WALLETS_API_KEY not configured")
+
+        kwargs: Dict[str, Any] = {}
+        if user_token:
+            kwargs["headers"] = {"X-User-Token": user_token}
+
+        response = await self.http_client.get(
+            f"{self.api_base_url}/transactions/{transaction_id}",
+            **kwargs,
+        )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+        return data.get("transaction") or data

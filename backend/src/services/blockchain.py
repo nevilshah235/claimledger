@@ -3,12 +3,22 @@ Blockchain Service.
 Handles interactions with Arc blockchain and ClaimEscrow contract.
 
 Uses USDC on Arc for settlement.
+When AUTO_SETTLE_PRIVATE_KEY is set, approve_claim runs the real 3-step
+(USDC.approve, depositEscrow, approveClaim) via web3. Otherwise mock.
 """
 
+import logging
 import os
 from decimal import Decimal
 from typing import Optional, Dict, Any
 
+from web3 import Web3
+from web3.providers import HTTPProvider
+
+from . import arc_rpc
+from .arc_rpc import USDC_ABI
+
+logger = logging.getLogger(__name__)
 
 # Contract configuration
 CLAIM_ESCROW_ADDRESS = os.getenv("CLAIM_ESCROW_ADDRESS", "0x80794995149E5d26F22c36eD56B817CBd8E5d4Fa")
@@ -73,13 +83,7 @@ class BlockchainService:
         self.rpc_url = rpc_url or ARC_RPC_URL
         self.private_key = private_key or os.getenv("INSURER_WALLET_PRIVATE_KEY")
         self.escrow_address = escrow_address or CLAIM_ESCROW_ADDRESS
-        
-        # TODO: Initialize web3 connection
-        # self.w3 = Web3(Web3.HTTPProvider(self.rpc_url))
-        # self.contract = self.w3.eth.contract(
-        #     address=self.escrow_address,
-        #     abi=CLAIM_ESCROW_ABI
-        # )
+        self.auto_settle_private_key = os.getenv("AUTO_SETTLE_PRIVATE_KEY")
     
     def claim_id_to_uint256(self, claim_id: str) -> int:
         """
@@ -145,32 +149,108 @@ class BlockchainService:
     ) -> Optional[str]:
         """
         Approve a claim and transfer USDC to recipient.
-        
-        Called by insurer to settle an approved claim.
-        
-        Args:
-            claim_id: Claim identifier
-            amount: Amount to transfer in USDC
-            recipient: Recipient address (claimant)
-            
-        Returns:
-            Transaction hash if successful
+
+        When AUTO_SETTLE_PRIVATE_KEY is set: runs USDC.approve, depositEscrow,
+        approveClaim via web3. Otherwise returns a mock tx hash (for dev/tests).
         """
-        # TODO: Implement actual blockchain call
-        # contract_claim_id = self.claim_id_to_uint256(claim_id)
-        # contract_amount = self.usdc_to_contract_amount(amount)
-        # 
-        # tx = self.contract.functions.approveClaim(
-        #     contract_claim_id,
-        #     contract_amount,
-        #     recipient
-        # ).build_transaction({...})
-        
-        # Mock for demo
-        import hashlib
-        from datetime import datetime
-        mock_data = f"approve-{claim_id}-{amount}-{recipient}-{datetime.utcnow().isoformat()}"
-        return "0x" + hashlib.sha256(mock_data.encode()).hexdigest()
+        amount_dec = Decimal(str(amount))
+
+        # Mock when auto-settle key not configured
+        if not self.auto_settle_private_key or not self.auto_settle_private_key.strip():
+            import hashlib
+            from datetime import datetime
+            mock_data = f"approve-{claim_id}-{amount}-{recipient}-{datetime.utcnow().isoformat()}"
+            return "0x" + hashlib.sha256(mock_data.encode()).hexdigest()
+
+        # Cap: do not auto-settle if over AUTO_SETTLE_MAX_AMOUNT
+        max_amt = os.getenv("AUTO_SETTLE_MAX_AMOUNT")
+        if max_amt is not None and max_amt != "":
+            try:
+                if float(amount_dec) > float(max_amt):
+                    logger.warning(
+                        "approve_claim: amount %s exceeds AUTO_SETTLE_MAX_AMOUNT %s",
+                        amount_dec, max_amt
+                    )
+                    return None
+            except (ValueError, TypeError):
+                pass
+
+        try:
+            from eth_account import Account
+
+            w3 = Web3(HTTPProvider(self.rpc_url))
+            if not w3.is_connected():
+                logger.warning("approve_claim: RPC not connected %s", self.rpc_url)
+                return None
+
+            acct = Account.from_key(self.auto_settle_private_key)
+            cid = arc_rpc.claim_id_to_uint256(claim_id)
+            amount_6 = arc_rpc.usdc_to_contract_amount(amount_dec)
+
+            if arc_rpc.is_settled(claim_id):
+                logger.info("approve_claim: claim %s already settled", claim_id)
+                return None
+
+            balance = arc_rpc.get_escrow_balance(claim_id) or Decimal(0)
+            if balance < amount_dec:
+                # 1) USDC.approve(ClaimEscrow, amount_6)
+                usdc = w3.eth.contract(
+                    address=Web3.to_checksum_address(USDC_ADDRESS),
+                    abi=USDC_ABI,
+                )
+                tx_approve = usdc.functions.approve(
+                    Web3.to_checksum_address(CLAIM_ESCROW_ADDRESS), amount_6
+                ).build_transaction({
+                    "from": acct.address,
+                    "nonce": w3.eth.get_transaction_count(acct.address),
+                    "gas": 100_000,
+                    "chainId": ARC_CHAIN_ID,
+                })
+                if "gasPrice" not in tx_approve:
+                    tx_approve["gasPrice"] = w3.eth.gas_price
+                signed = Account.sign_transaction(tx_approve, self.auto_settle_private_key)
+                h = w3.eth.send_raw_transaction(signed.raw_transaction)
+                w3.eth.wait_for_transaction_receipt(h, timeout=120)
+
+                # 2) depositEscrow(claimId, amount_6)
+                escrow = w3.eth.contract(
+                    address=Web3.to_checksum_address(CLAIM_ESCROW_ADDRESS),
+                    abi=CLAIM_ESCROW_ABI,
+                )
+                tx_dep = escrow.functions.depositEscrow(cid, amount_6).build_transaction({
+                    "from": acct.address,
+                    "nonce": w3.eth.get_transaction_count(acct.address),
+                    "gas": 200_000,
+                    "chainId": ARC_CHAIN_ID,
+                })
+                if "gasPrice" not in tx_dep:
+                    tx_dep["gasPrice"] = w3.eth.gas_price
+                signed_d = Account.sign_transaction(tx_dep, self.auto_settle_private_key)
+                hd = w3.eth.send_raw_transaction(signed_d.raw_transaction)
+                w3.eth.wait_for_transaction_receipt(hd, timeout=120)
+
+            # 3) approveClaim(claimId, amount_6, recipient)
+            escrow = w3.eth.contract(
+                address=Web3.to_checksum_address(CLAIM_ESCROW_ADDRESS),
+                abi=CLAIM_ESCROW_ABI,
+            )
+            tx_ac = escrow.functions.approveClaim(
+                cid, amount_6, Web3.to_checksum_address(recipient)
+            ).build_transaction({
+                "from": acct.address,
+                "nonce": w3.eth.get_transaction_count(acct.address),
+                "gas": 200_000,
+                "chainId": ARC_CHAIN_ID,
+            })
+            if "gasPrice" not in tx_ac:
+                tx_ac["gasPrice"] = w3.eth.gas_price
+            signed_ac = Account.sign_transaction(tx_ac, self.auto_settle_private_key)
+            h_ac = w3.eth.send_raw_transaction(signed_ac.raw_transaction)
+            w3.eth.wait_for_transaction_receipt(h_ac, timeout=120)
+            return h_ac.hex()
+        except Exception as e:
+            logger.exception("approve_claim failed: %s", e)
+            return None
     
     async def get_escrow_balance(self, claim_id: str) -> Decimal:
         """
