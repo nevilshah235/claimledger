@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Optional, List
 from fastapi import Depends as FastAPIDepends
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, status
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -473,4 +474,126 @@ async def add_claim_evidence(
         requested_data=claim.requested_data,
         human_review_required=claim.human_review_required if hasattr(claim, "human_review_required") else False,
         created_at=claim.created_at,
+    )
+
+
+class EvidenceItem(BaseModel):
+    """Evidence file information."""
+    id: str
+    file_type: str
+    file_path: str
+    file_size: Optional[int] = None
+    mime_type: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("/{claim_id}/evidence", response_model=List[EvidenceItem])
+async def get_claim_evidence(
+    claim_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Get list of evidence files for a claim.
+    
+    - Claimants: Can only view evidence for their own claims
+    - Insurers: Can view evidence for any claim
+    """
+    # Validate UUID format
+    try:
+        uuid.UUID(claim_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid claim ID format")
+    
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    
+    # Check authorization
+    if current_user:
+        if current_user.role == "claimant":
+            user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+            if user_wallet and claim.claimant_address != user_wallet.wallet_address:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You can only view evidence for your own claims"
+                )
+    
+    # Get all evidence for this claim
+    evidence_list = db.query(Evidence).filter(Evidence.claim_id == claim_id).order_by(Evidence.created_at).all()
+    
+    return [
+        EvidenceItem(
+            id=str(ev.id),
+            file_type=ev.file_type,
+            file_path=ev.file_path,
+            file_size=ev.file_size,
+            mime_type=ev.mime_type,
+            created_at=ev.created_at
+        )
+        for ev in evidence_list
+    ]
+
+
+@router.get("/{claim_id}/evidence/{evidence_id}/download")
+async def download_evidence(
+    claim_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Download/view an evidence file.
+    
+    - Claimants: Can only download evidence for their own claims
+    - Insurers: Can download evidence for any claim
+    """
+    # Validate UUID format
+    try:
+        uuid.UUID(claim_id)
+        uuid.UUID(evidence_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+    
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    
+    # Check authorization
+    if current_user:
+        if current_user.role == "claimant":
+            user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+            if user_wallet and claim.claimant_address != user_wallet.wallet_address:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You can only download evidence for your own claims"
+                )
+    
+    # Get evidence record
+    evidence = db.query(Evidence).filter(
+        Evidence.id == evidence_id,
+        Evidence.claim_id == claim_id
+    ).first()
+    
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    
+    # Check if file exists
+    file_path = Path(evidence.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on server")
+    
+    # Determine media type
+    media_type = evidence.mime_type or "application/octet-stream"
+    
+    # Get filename from path
+    filename = file_path.name
+    
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        filename=filename
     )
