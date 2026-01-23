@@ -1,178 +1,186 @@
-# ClaimLedger - High-Level Design (HLD)
+# ClaimLedger — High-Level Design (HLD)
 
 ## 1. Executive Summary
 
-ClaimLedger is an autonomous, multimodal insurance claims platform that combines AI-powered evaluation with blockchain-based settlements. The platform demonstrates the integration of:
+ClaimLedger is an **autonomous, multimodal insurance claims platform** built for hackathon demo. It combines:
 
-- **Google Agents Framework** with Gemini for intelligent claim evaluation
-- **x402 Protocol** with Circle Gateway for usage-based micropayments
-- **Arc Blockchain** with native USDC for transparent settlements
-- **Circle Wallets** for secure user wallet management
+- **Google ADK + Gemini** – orchestrator with 4-layer tool pipeline (extract → estimate → validate → verify) and six decision types.
+- **x402 + Circle Gateway** – micropayments only for verification (~$0.20/claim); extraction and cost checks are free.
+- **Arc + ClaimEscrow** – USDC settlement via user-controlled Circle wallets; no backend private keys.
+- **Circle Wallets** – claimant and insurer identity and balances.
 
-### Key Value Propositions
+### Value propositions
 
 | Feature | Benefit |
 |---------|---------|
-| AI Agent Evaluation | Automated, consistent claim assessment |
-| x402 Micropayments | Pay-per-use verification services |
-| On-chain Settlement | Transparent, auditable USDC transfers |
-| Fail-closed Logic | No funds move unless confidence >= 85% |
+| ADK orchestrator + 9 tools | Autonomous, auditable evaluation with extract / estimate / validate / verify / settle. |
+| x402 verification-only | Pay ~$0.20/claim for document, image, fraud checks; free extraction and validation. |
+| Fail-closed + auto-approve | No settlement unless confidence ≥ 85%; auto-approve at 95% when fraud &lt; 30%. |
+| User-signed settlement | Insurer signs approve → depositEscrow → approveClaim in-browser; no `INSURER_WALLET_PRIVATE_KEY`. |
 
 ---
 
-## 2. System Overview
+## 2. System overview
 
 ### 2.1 Stakeholders
 
 | Role | Description | Actions |
 |------|-------------|---------|
-| **Claimant** | Insurance policyholder | Submit claims, upload evidence, receive settlements |
-| **Insurer** | Insurance company | Review AI decisions, trigger settlements |
-| **AI Agent** | Autonomous evaluator | Analyze evidence, make decisions, call x402 services |
+| **Claimant** | Policyholder | Submit claims, upload evidence, track status, receive USDC. |
+| **Insurer** | Company rep | Trigger evaluation (x402), review AI output, enable settlements, sign 3-step settle. |
+| **ADK Orchestrator** | AI agent | Run 4-layer tools, output decision, optionally auto-approve/auto-settle. |
 
-### 2.2 Core Workflow
+### 2.2 Core workflow
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   SUBMIT    │────▶│   EVALUATE  │────▶│   APPROVE   │────▶│   SETTLE    │
-│   Claim     │     │   via AI    │     │   Decision  │     │   USDC      │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-     │                    │                   │                   │
-     ▼                    ▼                   ▼                   ▼
-  Claimant            AI Agent            Insurer           Arc Blockchain
-  uploads             calls x402          reviews           transfers USDC
-  evidence            verifiers           confidence        to claimant
+┌─────────────┐     ┌─────────────────────────────────────────┐     ┌─────────────┐
+│   SUBMIT    │────▶│   EVALUATE (4-layer + verify + decide)  │────▶│   SETTLE    │
+│   Claim     │     │   extract → estimate → validate →       │     │   USDC      │
+└─────────────┘     │   verify_doc, verify_image, verify_fraud│     └─────────────┘
+     │              └─────────────────────────────────────────┘            │
+     ▼                        │                                            ▼
+  Claimant                    ▼                                    Arc + ClaimEscrow
+  uploads              x402 (~$0.20)                                User-signed
+  evidence             only for verify_*                             (Circle UCW)
 ```
 
 ---
 
-## 3. System Architecture
+## 3. System architecture
 
-### 3.1 Architecture Diagram
+### 3.1 Architecture diagram
 
 ```mermaid
 graph TB
-    subgraph frontend [Frontend Layer - Next.js]
-        Landing[Landing Page]
+    subgraph frontend [Frontend - Next.js]
+        Landing[Landing]
         ClaimantUI[Claimant Dashboard]
         InsurerUI[Insurer Dashboard]
-        WalletConnect[Circle Wallets SDK]
+        EnableModal[EnableSettlementsModal]
+        Chat[ChatAssistant]
+        CircleSDK[Circle Wallets SDK]
     end
     
-    subgraph backend [Backend Layer - FastAPI]
+    subgraph backend [Backend - FastAPI]
         ClaimsAPI[Claims API]
         AgentAPI[Agent API]
-        VerifierAPI[x402 Verifiers]
+        VerifierAPI[Verifier API - x402, not in use]
         BlockchainAPI[Blockchain API]
-        Database[(SQLite/PostgreSQL)]
+        AdminAPI[Admin API]
+        AuthAPI[Auth API]
+        DB[(SQLite/PostgreSQL)]
     end
     
-    subgraph aiLayer [AI Layer]
-        Agent[ClaimEvaluationAgent]
-        Tools[Agent Tools]
-        X402Client[x402 Payment Client]
+    subgraph agent [AI - ADK + Gemini]
+        Orch[ADK Orchestrator]
+        Extract[extract_document_data, extract_image_data]
+        Cost[estimate_repair_cost, cross_check_amounts]
+        Valid[validate_claim_data]
+        Verify[verify_document, verify_image, verify_fraud]
+        Approve[approve_claim]
     end
     
-    subgraph external [External Services]
-        Gemini[Google Gemini API]
+    subgraph external [External]
+        Gemini[Gemini API]
         Gateway[Circle Gateway]
-        Arc[Arc Blockchain]
         CircleWallets[Circle Wallets API]
-    end
-    
-    subgraph blockchain [Smart Contracts]
-        Escrow[ClaimEscrow.sol]
-        USDC[USDC Token]
+        Arc[Arc + ClaimEscrow]
     end
     
     Landing --> ClaimantUI
     Landing --> InsurerUI
-    ClaimantUI --> WalletConnect
-    InsurerUI --> WalletConnect
+    ClaimantUI --> CircleSDK
+    InsurerUI --> CircleSDK
+    InsurerUI --> EnableModal
     
     ClaimantUI --> ClaimsAPI
     InsurerUI --> AgentAPI
     InsurerUI --> BlockchainAPI
-    
-    ClaimsAPI --> Database
-    AgentAPI --> Agent
-    VerifierAPI --> Database
-    BlockchainAPI --> Database
-    
-    Agent --> Tools
-    Agent --> Gemini
-    Tools --> X402Client
-    X402Client --> VerifierAPI
-    X402Client --> Gateway
-    
-    BlockchainAPI --> Escrow
-    Escrow --> USDC
-    WalletConnect --> CircleWallets
-    
-    Gateway --> USDC
-    Escrow --> Arc
+    InsurerUI --> AdminAPI
+    ClaimsAPI --> DB
+    AgentAPI --> Orch
+    Orch --> Extract
+    Orch --> Cost
+    Orch --> Valid
+    Orch --> Verify
+    Orch --> Approve
+    Orch --> Gemini
+    Verify --> VerifierAPI
+    VerifierAPI --> Gateway
+    Approve --> Arc
+    BlockchainAPI --> Arc
+    AdminAPI --> DB
+    AuthAPI --> DB
+    CircleSDK --> CircleWallets
 ```
 
-### 3.2 Layer Description
+### 3.2 Layers
 
-| Layer | Technology | Responsibility |
-|-------|------------|----------------|
-| **Frontend** | Next.js 14, TypeScript, Tailwind | User interfaces for claimants and insurers |
-| **Backend** | FastAPI, Python 3.11+ | REST APIs, business logic, data persistence |
-| **AI** | Google Agents Framework, Gemini | Claim evaluation, tool orchestration |
-| **Blockchain** | Solidity, Arc | USDC escrow and settlement |
-| **External** | Circle, Google | Payments, wallets, AI inference |
+| Layer | Tech | Responsibility |
+|-------|------|----------------|
+| **Frontend** | Next.js, TypeScript, Tailwind, Circle Wallets SDK | Landing, Claimant/Insurer UIs, EnableSettlements, ChatAssistant, wallet display. |
+| **Backend** | FastAPI, SQLAlchemy, JWT | Claims, Agent (evaluate, status, results, logs, chat), Verifier (x402), Blockchain (challenge/complete), Admin (fees, status), Auth. |
+| **AI** | ADK, Gemini | Orchestrator with 9 tools; 4-layer pipeline + verify + approve_claim. |
+| **Blockchain** | Arc, ClaimEscrow, USDC | Escrow and release; user-signed via Circle. |
+| **External** | Circle Gateway, Circle Wallets, Gemini | x402, balances, sign-in, AI. |
 
 ---
 
-## 4. Component Details
+## 4. Component overview
 
-### 4.1 Frontend Components
+### 4.1 Frontend
 
 ```
-frontend/
-├── app/
-│   ├── page.tsx              # Landing page with hero, stats, features
-│   ├── layout.tsx            # Root layout with gradient background
-│   ├── globals.css           # Design system (glassmorphism, gradients)
-│   ├── claimant/page.tsx     # Claimant dashboard
-│   └── insurer/page.tsx      # Insurer dashboard
+frontend/app/
+├── page.tsx                 # Landing: hero, stats, features, role CTAs
+├── claimant/page.tsx        # ClaimForm, ClaimStatus, VerificationSteps, ExtractedInfoSummary,
+│                            #   DataRequestCard, EvaluationProgress, WalletDisplay
+├── insurer/page.tsx         # FinanceKpiStrip, InsurerClaimReview, SettlementCard,
+│                            #   AgentResultsBreakdown, AdminFeeTracker, AutoSettleWalletCard,
+│                            #   TxValidationStatus, EnableSettlementsModal
 ├── components/
-│   ├── ui/                   # Base components (Button, Card, Badge, etc.)
-│   ├── ClaimForm.tsx         # Claim submission with file upload
-│   ├── ClaimStatus.tsx       # Status display with verification steps
-│   ├── VerificationSteps.tsx # x402 payment visualization
-│   ├── SettlementCard.tsx    # Settlement trigger for insurer
-│   ├── WalletConnect.tsx     # Circle Wallets integration
-│   └── Navbar.tsx            # Navigation with wallet display
+│   ├── ClaimForm, ClaimStatus, VerificationSteps, ExtractedInfoSummary, DataRequestCard
+│   ├── EvaluationProgress, AgentResultsBreakdown, ReviewReasonsList
+│   ├── InsurerClaimReview, SettlementCard, FinanceKpiStrip
+│   ├── AdminFeeTracker, AutoSettleWalletCard, AutoSettleWalletModal
+│   ├── TxValidationStatus, EnableSettlementsModal
+│   ├── WalletConnect, WalletDisplay, WalletInfoModal, UserMenu
+│   ├── ChatAssistant (not in use), AuthModal, LoginModal, Navbar
+│   └── ui/ (Button, Card, Badge, Input, Modal)
 └── lib/
-    ├── api.ts                # Typed API client
-    └── types.ts              # TypeScript interfaces
+    ├── api.ts               # Typed API client
+    └── types.ts             # Claim, Evaluation, Settlement, etc.
 ```
 
-### 4.2 Backend Components
+### 4.2 Backend
 
 ```
-backend/
-├── src/
-│   ├── main.py               # FastAPI app with lifespan management
-│   ├── database.py           # SQLAlchemy session management
-│   ├── models.py             # ORM models (Claim, Evidence, etc.)
-│   ├── api/
-│   │   ├── claims.py         # POST/GET /claims endpoints
-│   │   ├── agent.py          # POST /agent/evaluate endpoint
-│   │   ├── verifier.py       # x402-protected verification endpoints
-│   │   └── blockchain.py     # POST /blockchain/settle endpoint
-│   ├── agent/
-│   │   ├── agent.py          # ClaimEvaluationAgent class
-│   │   └── tools.py          # Agent tools (verify_*, approve_claim)
-│   └── services/
-│       ├── x402_client.py    # HTTP 402 handler with Gateway payment
-│       ├── gateway.py        # Circle Gateway API client
-│       └── blockchain.py     # Arc contract interactions
+backend/src/
+├── main.py, database.py, models.py
+├── api/
+│   ├── claims.py            # POST/GET /claims, GET /claims/{id}
+│   ├── agent.py             # POST /agent/evaluate, GET /agent/status, results, logs (POST /agent/chat: not in use)
+│   ├── verifier.py          # x402 document, image, fraud (not in use)
+│   ├── blockchain.py        # POST /blockchain/settle/{id}/challenge, /complete
+│   ├── admin.py             # GET /admin/fees, /admin/status
+│   └── auth.py              # register, login, me, wallet
+├── agent/
+│   ├── adk_agents/orchestrator_agent.py   # ADK LlmAgent, 4-layer + verify + approve
+│   ├── adk_agents/orchestrator.py         # get_adk_orchestrator, evaluate_claim
+│   ├── adk_tools.py         # ADK FunctionTools: extract_*, estimate_*, cross_check, validate_*, verify_*, approve_claim
+│   ├── adk_schemas.py       # ORCHESTRATOR_SCHEMA, DOCUMENT_SCHEMA, FRAUD_SCHEMA, REASONING_SCHEMA
+│   ├── tools.py             # verify_document, verify_image, verify_fraud, approve_claim (x402 / chain)
+│   ├── tools_extraction.py  # extract_document_data, extract_image_data (free)
+│   ├── tools_cost_estimation.py  # estimate_repair_cost, cross_check_amounts (free)
+│   └── tools_validation.py  # validate_claim_data (free)
+└── services/
+    ├── x402_client.py       # 402 handling, Gateway payment
+    ├── gateway.py           # Circle Gateway API
+    ├── blockchain.py        # Arc / ClaimEscrow (read). Settlement write via Circle challenge.
+    └── circle_wallets.py    # User-controlled wallets, create_user_contract_execution_challenge
 ```
 
-### 4.3 Smart Contract
+### 4.3 Smart contract
 
 ```solidity
 // contracts/src/ClaimEscrow.sol
@@ -180,269 +188,175 @@ contract ClaimEscrow {
     IERC20 public usdc;
     mapping(uint256 => uint256) public escrowBalances;
     mapping(uint256 => bool) public settledClaims;
-    
+
     function depositEscrow(uint256 claimId, uint256 amount) external;
     function approveClaim(uint256 claimId, uint256 amount, address recipient) external;
     function getEscrowBalance(uint256 claimId) external view returns (uint256);
     function isSettled(uint256 claimId) external view returns (bool);
-    
+
     event EscrowDeposited(uint256 indexed claimId, address indexed depositor, uint256 amount);
     event ClaimSettled(uint256 indexed claimId, address indexed recipient, uint256 amount);
 }
 ```
 
----
-
-## 5. Technology Stack
-
-### 5.1 Backend Stack
-
-| Component | Technology | Version | Purpose |
-|-----------|------------|---------|---------|
-| Runtime | Python | 3.11+ | Primary language |
-| Framework | FastAPI | 0.104+ | REST API framework |
-| ORM | SQLAlchemy | 2.0+ | Database abstraction |
-| Database | SQLite/PostgreSQL | - | Data persistence |
-| AI SDK | google-genai | 0.2+ | Gemini API client |
-| HTTP Client | httpx | 0.25+ | Async HTTP requests |
-
-### 5.2 Frontend Stack
-
-| Component | Technology | Version | Purpose |
-|-----------|------------|---------|---------|
-| Framework | Next.js | 14+ | React framework |
-| Language | TypeScript | 5+ | Type safety |
-| Styling | Tailwind CSS | 3+ | Utility-first CSS |
-| Web3 | wagmi/viem | - | Blockchain interactions |
-| Wallets | Circle Wallets SDK | - | Wallet-as-a-service |
-
-### 5.3 Blockchain Stack
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| Language | Solidity 0.8.20 | Smart contract development |
-| Toolkit | Foundry | Build, test, deploy |
-| Network | Arc Testnet | Settlement layer |
-| Token | USDC | Native gas + payments |
+Settlement: today `POST /blockchain/settle/{id}` may perform a single on-chain step (or mock). The **target** design uses a 3-step user-signed flow via `POST /blockchain/settle/{id}/challenge` and `/complete`: `USDC.approve` → `depositEscrow` → `approveClaim` in the frontend with Circle User-Controlled wallet. See [REAL_USDC_SETTLEMENT.md](REAL_USDC_SETTLEMENT.md).
 
 ---
 
-## 6. External Integrations
+## 5. AI agent: 4-layer pipeline + decisions
 
-### 6.1 Circle Gateway (x402 Micropayments)
+### 5.1 Tool layers
 
-```mermaid
-sequenceDiagram
-    participant Agent as AI Agent
-    participant API as Verifier API
-    participant Gateway as Circle Gateway
-    
-    Agent->>API: POST /verifier/document
-    API-->>Agent: HTTP 402 Payment Required
-    Note right of API: X-Payment-Amount: 0.10<br/>X-Payment-Currency: USDC
-    
-    Agent->>Gateway: Create micropayment
-    Gateway-->>Agent: Payment receipt token
-    
-    Agent->>API: POST with X-Payment-Receipt header
-    API-->>Agent: HTTP 200 Verification result
-```
+| Layer | Tools | Cost | Purpose |
+|-------|-------|------|---------|
+| 1 – Extract | `extract_document_data`, `extract_image_data` | Free | Get amounts, damage, structure before paying. |
+| 2 – Cost | `estimate_repair_cost`, `cross_check_amounts` | Free | Estimate and cross-check claim vs document vs image. |
+| 3 – Validate | `validate_claim_data` | Free | Filter invalid/obvious fraud before verify. |
+| 4 – Verify | `verify_document`, `verify_image`, `verify_fraud` | x402 | ~$0.05 + $0.10 + $0.05 ≈ $0.20 |
+| Settle | `approve_claim` | On-chain | Optional auto-settle when conditions met. |
 
-**Pricing Model:**
+### 5.2 Decision types
+
+| Decision | Meaning | Typical next step |
+|----------|---------|-------------------|
+| `AUTO_APPROVED` | Confidence ≥ 95%, no contradictions, fraud &lt; 30% | Can auto-settle. |
+| `APPROVED_WITH_REVIEW` | Confidence ≥ 85%, ready for human approve + settle | Insurer reviews and settles. |
+| `NEEDS_REVIEW` | 70–85% or contradictions | Manual review. |
+| `NEEDS_MORE_DATA` | 50–70% or gaps | Request evidence via `requested_data`. |
+| `INSUFFICIENT_DATA` | &lt; 50% | Request evidence or reject. |
+| `FRAUD_DETECTED` | fraud_risk ≥ 70% | Reject. |
+
+### 5.3 Thresholds (code-enforced)
+
+- **AUTO_APPROVE**: confidence ≥ 0.95, contradictions = 0, fraud_risk &lt; 0.3.
+- **FRAUD_DETECTED**: fraud_risk ≥ 0.7.
+- **APPROVED_WITH_REVIEW**: confidence ≥ 0.85, no contradictions.
+- **NEEDS_REVIEW**: confidence ≥ 0.70.
+- **NEEDS_MORE_DATA**: confidence ≥ 0.50.
+- **INSUFFICIENT_DATA**: confidence &lt; 0.50.
+
+---
+
+## 6. x402 and Circle
+
+### 6.1 Verification pricing
+
 | Verifier | Price (USDC) |
 |----------|--------------|
-| Document | $0.10 |
-| Image | $0.15 |
-| Fraud | $0.10 |
-| **Total per claim** | **$0.35** |
+| document | $0.05 |
+| image | $0.10 |
+| fraud | $0.05 |
+| **Total (all three)** | **≈ $0.20** |
 
-### 6.2 Circle Wallets
+Extraction, cost estimation, and validation tools do **not** use x402.
 
-- **Purpose:** Wallet-as-a-service for claimants and insurers
-- **Features:** MPC-secured keys, unified balance across chains
-- **Integration:** Frontend SDK for wallet connection and signing
+### 6.2 Circle Gateway (x402)
 
-### 6.3 Arc Blockchain
+- Verifier endpoints return `402 Payment Required` with `X-Payment-Amount`, `X-Gateway-Payment-Id`.
+- Agent (via `x402_client`) pays through Circle Gateway and retries with `X-Payment-Receipt`.
+- Receipts stored in `x402_receipts` for audit and `GET /admin/fees`.
 
-- **Purpose:** Settlement layer for USDC transfers
-- **Features:** EVM-compatible, native USDC gas
-- **Contract:** ClaimEscrow deployed on Arc testnet
+### 6.3 Circle Wallets (user-controlled)
 
-### 6.4 Google Gemini
-
-- **Model:** gemini-2.0-flash (configurable)
-- **Purpose:** Multimodal reasoning for claim evaluation
-- **Features:** Tool calling, structured output, image analysis
+- Claimant and insurer use Circle User-Controlled wallets.
+- Settlement: insurer signs `approve` → `depositEscrow` → `approveClaim` via `create_user_contract_execution_challenge` and frontend `sdk.execute(challengeId)`.
+- No `INSURER_WALLET_PRIVATE_KEY`; see [REAL_USDC_SETTLEMENT.md](REAL_USDC_SETTLEMENT.md).
 
 ---
 
-## 7. Data Flow
+## 7. Settlement flow (target: user-signed)
 
-### 7.1 Claim Submission Flow
-
-```mermaid
-sequenceDiagram
-    participant C as Claimant
-    participant F as Frontend
-    participant B as Backend
-    participant DB as Database
-    
-    C->>F: Fill claim form + upload files
-    F->>B: POST /claims (form data)
-    B->>DB: Create Claim record
-    B->>DB: Create Evidence records
-    B-->>F: { claim_id, status: "SUBMITTED" }
-    F-->>C: Show claim confirmation
-```
-
-### 7.2 Agent Evaluation Flow
+The following is the **target** design from [REAL_USDC_SETTLEMENT.md](REAL_USDC_SETTLEMENT.md). The current `POST /blockchain/settle/{id}` may use a different (e.g. single-call or mock) implementation.
 
 ```mermaid
 sequenceDiagram
-    participant I as Insurer
-    participant B as Backend
-    participant A as Agent
-    participant V as Verifiers
-    participant G as Gateway
-    participant DB as Database
-    
-    I->>B: POST /agent/evaluate/{claimId}
-    B->>A: evaluate(claim_id, evidence)
-    
-    A->>V: verify_document (x402)
-    V-->>A: 402 Payment Required
-    A->>G: Pay $0.10 USDC
-    G-->>A: Receipt
-    A->>V: verify_document + receipt
-    V-->>A: Document valid
-    
-    A->>V: verify_image (x402)
-    V-->>A: 402 → Pay → Result
-    
-    A->>V: verify_fraud (x402)
-    V-->>A: 402 → Pay → Result
-    
-    A->>A: Calculate confidence
-    A-->>B: { decision, confidence, reasoning }
-    B->>DB: Update Claim, Create Evaluation
-    B-->>I: Evaluation result
-```
+    participant I as Insurer (browser)
+    participant FE as Frontend
+    participant API as Backend
+    participant Circle as Circle Wallets API
+    participant Arc as Arc + ClaimEscrow
 
-### 7.3 Settlement Flow
+    I->>FE: Settle claim
+    FE->>API: POST /blockchain/settle/{id}/challenge { step: "approve" }
+    API->>Circle: create_user_contract_execution_challenge (USDC.approve)
+    Circle-->>API: challengeId, user_token, encryption_key
+    API-->>FE: challengeId, step, nextStep
+    FE->>Circle: sdk.setAuthentication + sdk.execute(challengeId)
+    Circle->>Arc: USDC.approve(ClaimEscrow, amount)
+    Arc-->>Circle: tx
+    Circle-->>FE: done
 
-```mermaid
-sequenceDiagram
-    participant I as Insurer
-    participant B as Backend
-    participant Arc as Arc Blockchain
-    participant E as ClaimEscrow
-    participant C as Claimant
-    
-    I->>B: POST /blockchain/settle/{claimId}
-    B->>Arc: Call approveClaim()
-    Arc->>E: Execute settlement
-    E->>C: Transfer USDC
-    E-->>Arc: Emit ClaimSettled event
-    Arc-->>B: Transaction hash
-    B-->>I: { tx_hash, status: "SETTLED" }
+    FE->>API: POST /blockchain/settle/{id}/challenge { step: "deposit" }
+    API->>Circle: challenge (depositEscrow)
+    API-->>FE: challengeId, nextStep
+    FE->>Circle: sdk.execute(challengeId)
+    Circle->>Arc: depositEscrow(claimId, amount)
+    Arc-->>FE: done
+
+    FE->>API: POST /blockchain/settle/{id}/challenge { step: "approve_claim" }
+    API->>Circle: challenge (approveClaim)
+    API-->>FE: challengeId, nextStep
+    FE->>Circle: sdk.execute(challengeId)
+    Circle->>Arc: approveClaim(claimId, amount, claimant)
+    Arc->>Arc: USDC transfer to claimant
+    Arc-->>FE: done
+
+    FE->>API: POST /blockchain/settle/{id}/complete { transactionId, txHash? }
+    API->>API: Fetch txHash if needed, set claim SETTLED, tx_hash
+    API-->>FE: { status: "SETTLED", tx_hash }
 ```
 
 ---
 
-## 8. Security Considerations
+## 8. Data flow (simplified)
 
-### 8.1 Authentication & Authorization
+### 8.1 Claim submission
+
+Claimant → `POST /claims` (form + files) → DB (Claim, Evidence) → `SUBMITTED`.
+
+### 8.2 Evaluation
+
+Insurer → `POST /agent/evaluate/{id}` → ADK Orchestrator:
+
+1. **Extract** (free): `extract_document_data`, `extract_image_data`.
+2. **Cost** (free): `estimate_repair_cost`, `cross_check_amounts`.
+3. **Validate** (free): `validate_claim_data`.
+4. **Verify** (x402): `verify_document`, `verify_image`, `verify_fraud`.
+5. **Decide** from tool_results + thresholds; optionally `approve_claim` (auto-settle).
+
+Backend maps `tool_results` → `agent_results`, stores `AgentResult`, `Evaluation`, updates `Claim` (decision, status, `review_reasons`, `requested_data`, `human_review_required`, `auto_approved`, `auto_settled`, `tx_hash`).
+
+### 8.3 Settlement
+
+Insurer (with Circle wallet) → `POST /blockchain/settle/{id}/challenge` for `approve` → `deposit` → `approve_claim`; frontend executes each via SDK. Then `POST /blockchain/settle/{id}/complete` with `transactionId` (and optionally `txHash`). Backend sets `status=SETTLED`, `tx_hash`.
+
+---
+
+## 9. Security and auth
 
 | Layer | Mechanism |
 |-------|-----------|
-| Frontend | Circle Wallets (wallet-based auth) |
-| Backend | Wallet address validation |
-| Blockchain | Transaction signing |
-
-### 8.2 Data Protection
-
-- **Evidence files:** Stored locally (demo) or IPFS (production)
-- **Payment receipts:** Stored in database for audit trail
-- **Wallet keys:** Managed by Circle (MPC-secured)
-
-### 8.3 Smart Contract Security
-
-- **Access control:** Public functions with require() checks
-- **Reentrancy:** No external calls before state updates
-- **Input validation:** Amount > 0, valid addresses
+| **Auth** | JWT (email/password). Roles: claimant, insurer. Optional `ADMIN_WALLET_ADDRESS` for admin auto-login. |
+| **Wallet** | Circle User-Controlled; `UserWallet` links `user_id` to `circle_wallet_id`, `wallet_address`. |
+| **x402** | Insurer’s wallet (from `UserWallet`) is used by agent for verify_* payments via `set_wallet_address`. |
+| **Settlement** | All on-chain writes via user-signed Circle challenges; no backend private keys. |
+| **Blockchain reads** | `eth_call` for `usdc_allowance`, `getEscrowBalance`; RPC from env. |
 
 ---
 
-## 9. Deployment Architecture
+## 10. Deployment (target)
 
-### 9.1 Development Environment
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Local Development                         │
-├─────────────────┬─────────────────┬─────────────────────────┤
-│   Frontend      │    Backend      │    Database             │
-│   localhost:3000│    localhost:8000│    SQLite (local file) │
-├─────────────────┴─────────────────┴─────────────────────────┤
-│                    Arc Testnet                               │
-│                    ClaimEscrow Contract                      │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 9.2 Production Architecture (Future)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Cloud Infrastructure                      │
-├─────────────────┬─────────────────┬─────────────────────────┤
-│   Vercel/CDN    │    Cloud Run    │    PostgreSQL           │
-│   (Frontend)    │    (Backend)    │    (Managed DB)         │
-├─────────────────┴─────────────────┴─────────────────────────┤
-│                    Arc Mainnet                               │
-│                    ClaimEscrow Contract                      │
-└─────────────────────────────────────────────────────────────┘
-```
+| Environment | Frontend | Backend | DB | Arc |
+|-------------|----------|---------|-----|-----|
+| **Local** | localhost:3000 | localhost:8000 | SQLite | Testnet |
+| **Prod (e.g. Vercel + Cloud Run)** | Vercel | Cloud Run | PostgreSQL | Testnet / Mainnet |
 
 ---
 
-## 10. Non-Functional Requirements
+## 11. References
 
-### 10.1 Performance
-
-| Metric | Target |
-|--------|--------|
-| Claim submission | < 2 seconds |
-| Agent evaluation | < 30 seconds |
-| Settlement confirmation | < 15 seconds |
-
-### 10.2 Scalability
-
-- **Stateless backend:** Horizontally scalable
-- **Database:** Connection pooling enabled
-- **Blockchain:** Arc handles settlement throughput
-
-### 10.3 Availability
-
-- **Demo target:** 99% uptime during hackathon
-- **Recovery:** Manual restart, database persistence
-
----
-
-## 11. Future Enhancements
-
-| Feature | Description | Priority |
-|---------|-------------|----------|
-| Multi-policy support | Multiple insurance policies per user | Medium |
-| Dispute resolution | Challenge AI decisions | Low |
-| IPFS storage | Decentralized evidence storage | Medium |
-| WebSocket updates | Real-time status notifications | Medium |
-| Analytics dashboard | Claim statistics and trends | Low |
-
----
-
-## 12. References
-
-- [Circle Gateway Documentation](https://developers.circle.com/w3s/docs/circle-programmable-wallets-an-overview)
-- [Arc Blockchain Documentation](https://docs.arc.xyz/)
-- [Google Agents Framework](https://ai.google.dev/docs)
-- [x402 Protocol Specification](https://www.x402.org/)
+- [Circle – User-Controlled Wallets, contract execution](https://developers.circle.com/api-reference/wallets/user-controlled-wallets/create-user-transaction-contract-execution-challenge)
+- [Arc](https://docs.arc.xyz/)
+- [Google ADK](https://github.com/google/adk), [Gemini](https://ai.google.dev/docs)
+- [x402](https://www.x402.org/)
+- [REAL_USDC_SETTLEMENT.md](REAL_USDC_SETTLEMENT.md), [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md), [TESTNET_MODE.md](TESTNET_MODE.md)

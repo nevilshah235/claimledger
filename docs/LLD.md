@@ -1,127 +1,81 @@
-# ClaimLedger - Low-Level Design (LLD)
+# ClaimLedger — Low-Level Design (LLD)
 
-## 1. Database Design
+## 1. Database design
 
-### 1.1 Entity-Relationship Diagram
+### 1.1 Entities
 
 ```mermaid
 erDiagram
     Claim ||--o{ Evidence : contains
     Claim ||--o{ Evaluation : has
     Claim ||--o{ X402Receipt : generates
-    
+    Claim ||--o{ AgentResult : has
+    Claim ||--o{ AgentLog : has
+    User ||--o| UserWallet : has
+
     Claim {
-        string id PK "UUID (36 chars)"
-        string claimant_address "Ethereum address (42 chars)"
-        decimal claim_amount "USDC amount (18,2)"
-        string status "SUBMITTED|EVALUATING|APPROVED|SETTLED|REJECTED"
-        string decision "APPROVED|NEEDS_REVIEW|REJECTED (nullable)"
-        float confidence "0.0-1.0 (nullable)"
-        decimal approved_amount "USDC amount (nullable)"
-        decimal processing_costs "Sum of x402 payments"
-        string tx_hash "Arc transaction hash (nullable)"
-        datetime created_at "Creation timestamp"
-        datetime updated_at "Last update timestamp"
+        string id PK
+        string claimant_address
+        decimal claim_amount
+        text description
+        string status "SUBMITTED|EVALUATING|APPROVED|SETTLED|REJECTED|NEEDS_REVIEW|AWAITING_DATA"
+        string decision "AUTO_APPROVED|APPROVED_WITH_REVIEW|NEEDS_REVIEW|NEEDS_MORE_DATA|INSUFFICIENT_DATA|FRAUD_DETECTED|REJECTED"
+        float confidence
+        decimal approved_amount
+        decimal processing_costs
+        string tx_hash
+        bool auto_approved
+        bool auto_settled
+        text comprehensive_summary
+        json review_reasons
+        json requested_data
+        bool human_review_required
+        datetime created_at
+        datetime updated_at
     }
-    
-    Evidence {
-        string id PK "UUID (36 chars)"
-        string claim_id FK "References Claim.id"
-        string file_type "image|document"
-        string file_path "Local file path"
-        string ipfs_hash "Optional IPFS hash"
-        datetime created_at "Creation timestamp"
-    }
-    
-    Evaluation {
-        string id PK "UUID (36 chars)"
-        string claim_id FK "References Claim.id"
-        text reasoning "Agent reasoning trail"
-        datetime created_at "Creation timestamp"
-    }
-    
-    X402Receipt {
-        string id PK "UUID (36 chars)"
-        string claim_id FK "References Claim.id"
-        string verifier_type "document|image|fraud"
-        decimal amount "USDC amount paid"
-        string gateway_payment_id "Gateway reference"
-        string gateway_receipt "Payment receipt token"
-        datetime created_at "Creation timestamp"
-    }
+
+    Evidence { string id PK, string claim_id FK, string file_type, string file_path, string ipfs_hash, int file_size, string mime_type, json analysis_metadata, string processing_status, datetime created_at }
+
+    Evaluation { string id PK, string claim_id FK, text reasoning, datetime created_at }
+
+    X402Receipt { string id PK, string claim_id FK, string verifier_type, decimal amount, string gateway_payment_id, string gateway_receipt, datetime created_at }
+
+    User { string id PK, string email, string password_hash, string role, datetime created_at, datetime updated_at }
+
+    UserWallet { string id PK, string user_id FK, string wallet_address, string circle_wallet_id, string wallet_set_id, datetime created_at, datetime updated_at }
+
+    AgentResult { string id PK, string claim_id FK, string agent_type, json result, float confidence, datetime created_at }
+
+    AgentLog { string id PK, string claim_id FK, string agent_type, text message, string log_level, json log_metadata, datetime created_at }
 ```
 
-### 1.2 Table Definitions
+### 1.2 Claim status and decision
 
-#### Claims Table
+| status | Meaning |
+|--------|---------|
+| SUBMITTED | Claim created, awaiting evaluation |
+| EVALUATING | Agent running (4-layer + verify) |
+| APPROVED | Ready for settlement (APPROVED_WITH_REVIEW or AUTO_APPROVED) |
+| SETTLED | USDC transferred, tx_hash set |
+| REJECTED | Denied (e.g. FRAUD_DETECTED) |
+| NEEDS_REVIEW | 70–85% or contradictions; manual review |
+| AWAITING_DATA | NEEDS_MORE_DATA or INSUFFICIENT_DATA; waiting for `requested_data` |
 
-```sql
-CREATE TABLE claims (
-    id VARCHAR(36) PRIMARY KEY,
-    claimant_address VARCHAR(42) NOT NULL,
-    claim_amount DECIMAL(18, 2) NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'SUBMITTED',
-    decision VARCHAR(20),
-    confidence FLOAT,
-    approved_amount DECIMAL(18, 2),
-    processing_costs DECIMAL(18, 2) NOT NULL DEFAULT 0.00,
-    tx_hash VARCHAR(66),
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
-    CONSTRAINT chk_status CHECK (status IN ('SUBMITTED', 'EVALUATING', 'APPROVED', 'SETTLED', 'REJECTED')),
-    CONSTRAINT chk_decision CHECK (decision IN ('APPROVED', 'NEEDS_REVIEW', 'REJECTED') OR decision IS NULL),
-    CONSTRAINT chk_confidence CHECK (confidence >= 0.0 AND confidence <= 1.0 OR confidence IS NULL)
-);
-```
+| decision | Meaning |
+|----------|---------|
+| AUTO_APPROVED | Confidence ≥ 95%, no contradictions, fraud &lt; 30% |
+| APPROVED_WITH_REVIEW | Confidence ≥ 85%; insurer must approve and settle |
+| NEEDS_REVIEW | 70–85% or contradictions |
+| NEEDS_MORE_DATA | 50–70% or evidence gaps |
+| INSUFFICIENT_DATA | &lt; 50% |
+| FRAUD_DETECTED | fraud_risk ≥ 70% |
+| REJECTED | Terminal reject (e.g. manual) |
 
-#### Evidence Table
+### 1.3 AgentResult.agent_type
 
-```sql
-CREATE TABLE evidence (
-    id VARCHAR(36) PRIMARY KEY,
-    claim_id VARCHAR(36) NOT NULL,
-    file_type VARCHAR(20) NOT NULL,
-    file_path VARCHAR(255) NOT NULL,
-    ipfs_hash VARCHAR(64),
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
-    CONSTRAINT fk_claim FOREIGN KEY (claim_id) REFERENCES claims(id) ON DELETE CASCADE,
-    CONSTRAINT chk_file_type CHECK (file_type IN ('image', 'document'))
-);
-```
+Stored as: `document`, `image`, `fraud` (mapped from tool names `verify_document`, `verify_image`, `verify_fraud`). The orchestrator’s `tool_results` are converted to this form before persisting.
 
-#### Evaluations Table
-
-```sql
-CREATE TABLE evaluations (
-    id VARCHAR(36) PRIMARY KEY,
-    claim_id VARCHAR(36) NOT NULL,
-    reasoning TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
-    CONSTRAINT fk_claim FOREIGN KEY (claim_id) REFERENCES claims(id) ON DELETE CASCADE
-);
-```
-
-#### X402 Receipts Table
-
-```sql
-CREATE TABLE x402_receipts (
-    id VARCHAR(36) PRIMARY KEY,
-    claim_id VARCHAR(36) NOT NULL,
-    verifier_type VARCHAR(20) NOT NULL,
-    amount DECIMAL(18, 2) NOT NULL,
-    gateway_payment_id VARCHAR(255) NOT NULL,
-    gateway_receipt VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
-    CONSTRAINT fk_claim FOREIGN KEY (claim_id) REFERENCES claims(id) ON DELETE CASCADE,
-    CONSTRAINT chk_verifier_type CHECK (verifier_type IN ('document', 'image', 'fraud'))
-);
-```
-
-### 1.3 Indexes
+### 1.4 Indexes (typical)
 
 ```sql
 CREATE INDEX idx_claims_status ON claims(status);
@@ -129,934 +83,331 @@ CREATE INDEX idx_claims_claimant ON claims(claimant_address);
 CREATE INDEX idx_claims_created ON claims(created_at DESC);
 CREATE INDEX idx_evidence_claim ON evidence(claim_id);
 CREATE INDEX idx_evaluations_claim ON evaluations(claim_id);
-CREATE INDEX idx_receipts_claim ON x402_receipts(claim_id);
+CREATE INDEX idx_x402_receipts_claim ON x402_receipts(claim_id);
+CREATE INDEX idx_agent_results_claim ON agent_results(claim_id);
+CREATE INDEX idx_agent_logs_claim ON agent_logs(claim_id);
 ```
 
 ---
 
-## 2. API Specifications
+## 2. API specifications
 
 ### 2.1 Claims API
 
-#### POST /claims - Create Claim
-
-**Request:**
-```http
-POST /claims HTTP/1.1
-Content-Type: multipart/form-data
-
-claimant_address: 0xABCDEF1234567890ABCDEF1234567890ABCDEF12
-claim_amount: 1250.00
-files: [invoice.pdf, damage.jpg]
-```
-
-**Response (201 Created):**
-```json
-{
-  "claim_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "SUBMITTED"
-}
-```
-
-**Validation Rules:**
-- `claimant_address`: Valid Ethereum address (42 chars, starts with 0x)
-- `claim_amount`: Positive decimal number
-- `files`: Optional, accepts image/* and .pdf/.doc/.docx
-
-#### GET /claims/{claim_id} - Get Claim Status
-
-**Request:**
-```http
-GET /claims/550e8400-e29b-41d4-a716-446655440000 HTTP/1.1
-```
-
-**Response (200 OK):**
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "claimant_address": "0xABCDEF1234567890ABCDEF1234567890ABCDEF12",
-  "claim_amount": 1250.00,
-  "status": "APPROVED",
-  "decision": "APPROVED",
-  "confidence": 0.92,
-  "approved_amount": 1250.00,
-  "processing_costs": 0.35,
-  "tx_hash": null,
-  "created_at": "2024-01-15T10:30:00Z"
-}
-```
-
-**Error Responses:**
-| Status | Condition |
-|--------|-----------|
-| 400 | Invalid UUID format |
-| 404 | Claim not found |
+- **POST /claims** (multipart): `claimant_address`, `claim_amount`, `description?`, `files[]`. Creates Claim + Evidence. Returns `{ claim_id, status: "SUBMITTED" }`.
+- **GET /claims**: List claims (filtered by role: claimant sees own, insurer sees all).
+- **GET /claims/{id}**: Full claim including `review_reasons`, `requested_data`, `human_review_required`, `auto_approved`, `auto_settled`, `tx_hash`, evidence, evaluations.
 
 ### 2.2 Agent API
 
-#### POST /agent/evaluate/{claim_id} - Trigger Evaluation
+- **POST /agent/evaluate/{claim_id}**
+  - Pre: status in `SUBMITTED`, `NEEDS_REVIEW`.
+  - Sets status `EVALUATING`, runs ADK orchestrator (4-layer + verify + approve_claim when applicable).
+  - Uses insurer’s `UserWallet.wallet_address` for x402 via `set_wallet_address`.
+  - Response: `EvaluationResponse`: `claim_id`, `decision`, `confidence`, `approved_amount`, `reasoning`, `processing_costs`, `summary`, `auto_approved`, `auto_settled`, `tx_hash`, `review_reasons`, `requested_data`, `human_review_required`, `agent_results`, `tool_calls`.
 
-**Request:**
-```http
-POST /agent/evaluate/550e8400-e29b-41d4-a716-446655440000 HTTP/1.1
-```
+- **GET /agent/status/{claim_id}**: `status`, `completed_agents`, `pending_agents`, `progress_percentage`.
 
-**Response (200 OK):**
-```json
-{
-  "claim_id": "550e8400-e29b-41d4-a716-446655440000",
-  "decision": "APPROVED",
-  "confidence": 0.92,
-  "approved_amount": 1250.00,
-  "reasoning": "Document verified: $1,250.00 repair invoice. Image analysis shows collision damage to front_bumper, hood. Severity: moderate. Fraud score: 0.05 (LOW risk). Confidence: 92%. Recommendation: APPROVED",
-  "processing_costs": 0.35
-}
-```
+- **GET /agent/results/{claim_id}**: List of `{ agent_type, result, confidence, created_at }`.
 
-**Processing Steps:**
-1. Fetch claim and evidence from database
-2. Initialize ClaimEvaluationAgent
-3. Execute tool sequence (verify_document → verify_image → verify_fraud)
-4. Calculate confidence score
-5. Update claim status and create evaluation record
+- **GET /agent/logs/{claim_id}**: List of `{ id, claim_id, agent_type, message, log_level, metadata, created_at }`.
 
-### 2.3 Verifier API (x402-Protected)
+- **POST /agent/chat**: `{ message, role?, claim_id? }`. Role-aware assistant; if `claim_id`, injects claim context. Returns `{ reply }`. *(Not in use.)*
 
-#### POST /verifier/document - Document Verification
+### 2.3 Verifier API (x402) — *not in use*
 
-**Request (without payment):**
-```http
-POST /verifier/document HTTP/1.1
-Content-Type: application/json
+The `/verifier/*` endpoints and x402 flow exist in code; the **active evaluation path does not call them**.
 
-{
-  "claim_id": "550e8400-e29b-41d4-a716-446655440000",
-  "document_path": "uploads/550e8400/invoice.pdf"
-}
-```
+| Endpoint | Price (USDC) | Request | 402 headers |
+|----------|--------------|---------|-------------|
+| POST /verifier/document | $0.05 | `{ claim_id, document_path }` | X-Payment-Amount: 0.05, X-Payment-Currency: USDC, X-Gateway-Payment-Id |
+| POST /verifier/image | $0.10 | `{ claim_id, image_path }` | X-Payment-Amount: 0.10, … |
+| POST /verifier/fraud | $0.05 | `{ claim_id }` | X-Payment-Amount: 0.05, … |
 
-**Response (402 Payment Required):**
-```http
-HTTP/1.1 402 Payment Required
-X-Payment-Amount: 0.10
-X-Payment-Currency: USDC
-X-Payment-Description: Document verification fee
-X-Gateway-Payment-Id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+With `X-Payment-Receipt`, verifier validates, stores `X402Receipt`, runs ADK agent (document/image/fraud), returns `{ extracted_data|damage_assessment|fraud_score, valid, ... }`.
 
-{
-  "error": "Payment required",
-  "amount": "0.10",
-  "currency": "USDC",
-  "gateway_payment_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "payment_url": "https://gateway.circle.com/pay/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "description": "Document verification fee"
-}
-```
-
-**Request (with payment receipt):**
-```http
-POST /verifier/document HTTP/1.1
-Content-Type: application/json
-X-Payment-Receipt: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-{
-  "claim_id": "550e8400-e29b-41d4-a716-446655440000",
-  "document_path": "uploads/550e8400/invoice.pdf"
-}
-```
-
-**Response (200 OK):**
-```json
-{
-  "extracted_data": {
-    "document_type": "invoice",
-    "amount": 3500.00,
-    "date": "2024-01-15",
-    "vendor": "Auto Repair Shop",
-    "description": "Front bumper repair and replacement"
-  },
-  "valid": true,
-  "verification_id": "ver-123-456"
-}
-```
-
-#### POST /verifier/image - Image Analysis
-
-**Price:** $0.15 USDC
-
-**Response (200 OK with valid receipt):**
-```json
-{
-  "damage_assessment": {
-    "damage_type": "collision",
-    "affected_parts": ["front_bumper", "hood"],
-    "severity": "moderate",
-    "estimated_cost": 3500.00,
-    "confidence": 0.89
-  },
-  "valid": true,
-  "analysis_id": "img-789-012"
-}
-```
-
-#### POST /verifier/fraud - Fraud Detection
-
-**Price:** $0.10 USDC
-
-**Response (200 OK with valid receipt):**
-```json
-{
-  "fraud_score": 0.05,
-  "risk_level": "LOW",
-  "check_id": "fraud-345-678"
-}
-```
-
-**Risk Level Thresholds:**
-| Score Range | Risk Level |
-|-------------|------------|
-| 0.00 - 0.29 | LOW |
-| 0.30 - 0.69 | MEDIUM |
-| 0.70 - 1.00 | HIGH |
+**Total verification cost (all three): ≈ $0.20 USDC.**
 
 ### 2.4 Blockchain API
 
-#### POST /blockchain/settle/{claim_id} - Settle Claim
+- **POST /blockchain/settle/{claim_id}** (current)
+  - Body: `{ recipient_override? }`.
+  - Pre: `claim.status == APPROVED`, `approved_amount` set, user is insurer. Circle App ID validated.
+  - Calls `execute_settlement(claim_id, approved_amount, recipient)` (implementation may be mock or backend-signed).
+  - Sets `claim.status = SETTLED`, `claim.tx_hash`.
+  - Response: `{ claim_id, tx_hash, amount, recipient, status: "SETTLED" }`.
 
-**Request:**
-```http
-POST /blockchain/settle/550e8400-e29b-41d4-a716-446655440000 HTTP/1.1
-Content-Type: application/json
+**Target (user-signed, no backend key):** See [REAL_USDC_SETTLEMENT.md](REAL_USDC_SETTLEMENT.md): `POST /blockchain/settle/{id}/challenge` with `{ step: "approve"|"deposit"|"approve_claim" }` returning `{ challengeId, user_token?, encryption_key?, step, nextStep }`, and `POST /blockchain/settle/{id}/complete` with `{ transactionId, txHash? }`.
 
-{}
-```
+### 2.5 Admin API
 
-**Response (200 OK):**
-```json
-{
-  "claim_id": "550e8400-e29b-41d4-a716-446655440000",
-  "tx_hash": "0x3d42c562fad62abd3bc282464cb1751845451b449b18f0c908fc2f4cd91f6811",
-  "amount": 1250.00,
-  "recipient": "0xABCDEF1234567890ABCDEF1234567890ABCDEF12",
-  "status": "SETTLED"
-}
-```
+- **GET /admin/status**: `admin_wallet_configured`, `admin_wallet_address` (masked), `admin_user_exists`, `message`. Used for admin auto-login and onboarding.
+- **GET /admin/fees** (insurer only): `wallet_address`, `current_balance` (from Circle), `total_spent`, `total_evaluations`, `average_cost_per_evaluation`, `fee_breakdown[]` (claim_id, total_cost, tool_costs, timestamp). Sources `x402_receipts` grouped by claim.
 
-**Preconditions:**
-- Claim status must be "APPROVED"
-- Claim must have approved_amount set
-- Claim must not already be settled
+### 2.6 Auth API
+
+- **POST /auth/register**: `{ email, password, role: "claimant"|"insurer" }`.
+- **POST /auth/login**: `{ email, password }` → JWT.
+- **GET /auth/me**: `{ id, email, role, wallet_address? }`.
+- **GET /auth/wallet**: `{ wallet_address?, circle_wallet_id?, balance? }` (balance from Circle when available). Plus Circle Connect init/complete for wallet creation.
 
 ---
 
-## 3. Claim Status State Machine
+## 3. Claim status state machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> SUBMITTED: Claimant submits claim
-    SUBMITTED --> EVALUATING: Agent evaluation triggered
-    EVALUATING --> APPROVED: confidence >= 0.85
-    EVALUATING --> NEEDS_REVIEW: confidence < 0.85
-    EVALUATING --> REJECTED: fraud_score >= 0.70
-    APPROVED --> SETTLED: Insurer triggers settlement
-    NEEDS_REVIEW --> APPROVED: Manual approval
-    NEEDS_REVIEW --> REJECTED: Manual rejection
+    [*] --> SUBMITTED: Claimant submits
+    SUBMITTED --> EVALUATING: POST /agent/evaluate
+    EVALUATING --> APPROVED: decision AUTO_APPROVED | APPROVED_WITH_REVIEW
+    EVALUATING --> NEEDS_REVIEW: decision NEEDS_REVIEW
+    EVALUATING --> AWAITING_DATA: decision NEEDS_MORE_DATA | INSUFFICIENT_DATA
+    EVALUATING --> REJECTED: decision FRAUD_DETECTED | REJECTED
+    NEEDS_REVIEW --> EVALUATING: re-evaluate
+    NEEDS_REVIEW --> APPROVED: manual approve
+    NEEDS_REVIEW --> REJECTED: manual reject
+    AWAITING_DATA --> EVALUATING: new evidence + re-evaluate
+    AWAITING_DATA --> REJECTED: manual reject
+    APPROVED --> SETTLED: POST /blockchain/settle (or 3-step challenge/complete)
     SETTLED --> [*]
     REJECTED --> [*]
 ```
 
-### State Descriptions
-
-| State | Description | Next Actions |
-|-------|-------------|--------------|
-| SUBMITTED | Claim created, awaiting evaluation | Trigger evaluation |
-| EVALUATING | AI agent processing claim | Wait for completion |
-| APPROVED | Agent approved, awaiting settlement | Trigger settlement |
-| NEEDS_REVIEW | Low confidence, manual review needed | Manual approve/reject |
-| REJECTED | Claim denied | None (terminal) |
-| SETTLED | USDC transferred on Arc | None (terminal) |
-
 ---
 
-## 4. Agent Decision Logic
-
-### 4.1 Tool Sequence
+## 4. Agent: 4-layer tool sequence
 
 ```mermaid
 flowchart TD
-    Start[Start Evaluation] --> Doc{Has Documents?}
-    Doc -->|Yes| VerifyDoc[verify_document]
-    Doc -->|No| SkipDoc[Skip Document Check]
-    VerifyDoc --> Img{Has Images?}
-    SkipDoc --> Img
-    
-    Img -->|Yes| VerifyImg[verify_image]
-    Img -->|No| SkipImg[Skip Image Check]
-    VerifyImg --> Fraud[verify_fraud]
-    SkipImg --> Fraud
-    
-    Fraud --> Calc[Calculate Confidence]
-    Calc --> Decision{confidence >= 0.85?}
-    Decision -->|Yes| Approved[APPROVED]
-    Decision -->|No| NeedsReview[NEEDS_REVIEW]
-    
-    Approved --> End[Return Result]
-    NeedsReview --> End
+    Start[Start] --> L1[Layer 1: Extract]
+    L1 --> L1a[extract_document_data per doc]
+    L1 --> L1b[extract_image_data per image]
+    L1a --> L2[Layer 2: Cost]
+    L1b --> L2
+    L2 --> L2a[estimate_repair_cost]
+    L2 --> L2b[cross_check_amounts]
+    L2a --> L3[Layer 3: Validate]
+    L2b --> L3
+    L3 --> L3a[validate_claim_data]
+    L3a --> L4{L4: Verify}
+    L4 --> Vd[verify_document if docs]
+    L4 --> Vi[verify_image if images]
+    L4 --> Vf[verify_fraud always]
+    Vd --> Decide[Decide]
+    Vi --> Decide
+    Vf --> Decide
+    Decide --> Rule{Thresholds}
+    Rule -->|AUTO_APPROVE| Ap[approve_claim?]
+    Rule -->|APPROVED_WITH_REVIEW| End1[Return]
+    Rule -->|NEEDS_REVIEW| End1
+    Rule -->|NEEDS_MORE_DATA| End1
+    Rule -->|INSUFFICIENT_DATA| End1
+    Rule -->|FRAUD_DETECTED| End1
+    Ap --> End2[Return, auto_settled if ok]
 ```
 
-### 4.2 Confidence Calculation
+### 4.1 Tool layers and pricing
 
-```python
-def calculate_confidence(tool_results: List[tuple]) -> float:
-    """
-    Calculate overall confidence from tool results.
-    
-    Weights:
-    - Document verification: 40%
-    - Image analysis: 30%
-    - Fraud check: 30%
-    """
-    scores = []
-    
-    for tool_name, result in tool_results:
-        if not result.get("success", False):
-            scores.append(0.0)
-            continue
-        
-        if tool_name == "verify_document":
-            # Valid document = high score
-            scores.append(0.95 if result.get("valid") else 0.3)
-        
-        elif tool_name == "verify_image":
-            # Use damage assessment confidence
-            if result.get("valid"):
-                assessment = result.get("damage_assessment", {})
-                scores.append(assessment.get("confidence", 0.85))
-            else:
-                scores.append(0.3)
-        
-        elif tool_name == "verify_fraud":
-            # Lower fraud score = higher confidence
-            fraud_score = result.get("fraud_score", 0.5)
-            scores.append(1.0 - fraud_score)
-    
-    # Simple average (equal weights for demo)
-    return sum(scores) / len(scores) if scores else 0.0
-```
+| Layer | Tools | Cost |
+|-------|-------|------|
+| 1 | extract_document_data, extract_image_data | $0 |
+| 2 | estimate_repair_cost, cross_check_amounts | $0 |
+| 3 | validate_claim_data | $0 |
+| 4 | verify_document, verify_image, verify_fraud | $0.05 + $0.10 + $0.05 |
+| Settle | approve_claim | On-chain (no x402) |
 
-### 4.3 Decision Rules
+### 4.2 Decision enforcement (orchestrator_agent)
 
-| Condition | Decision | Action |
-|-----------|----------|--------|
-| confidence >= 0.85 | APPROVED | Agent can trigger settlement |
-| 0.50 <= confidence < 0.85 | NEEDS_REVIEW | Manual review required |
-| confidence < 0.50 OR fraud >= 0.70 | REJECTED | Claim denied |
+- **FRAUD_DETECTED**: fraud_risk ≥ 0.7.
+- **AUTO_APPROVED**: confidence ≥ 0.95, contradictions = 0, fraud_risk &lt; 0.3.
+- **APPROVED_WITH_REVIEW**: confidence ≥ 0.85, no contradictions.
+- **NEEDS_REVIEW**: confidence ≥ 0.70.
+- **NEEDS_MORE_DATA**: confidence ≥ 0.50.
+- **INSUFFICIENT_DATA**: confidence &lt; 0.50.
 
 ---
 
-## 5. x402 Payment Flow
+## 5. x402 payment flow — *not in use*
 
-### 5.1 Detailed Sequence
+This flow is implemented but **not invoked** in the current evaluation path.
 
-```mermaid
-sequenceDiagram
-    participant Agent as ClaimEvaluationAgent
-    participant Tool as Agent Tool
-    participant Client as x402Client
-    participant API as Verifier API
-    participant Gateway as Circle Gateway
-    participant DB as Database
-    
-    Agent->>Tool: verify_document(claim_id, path)
-    Tool->>Client: call_with_payment(url, data)
-    Client->>API: POST /verifier/document
-    
-    alt No payment receipt
-        API-->>Client: 402 Payment Required
-        Note over API,Client: Headers: X-Payment-Amount, X-Gateway-Payment-Id
-        
-        Client->>Gateway: create_micropayment($0.10)
-        Gateway-->>Client: receipt_token
-        
-        Client->>API: POST with X-Payment-Receipt
-    end
-    
-    API->>API: Validate receipt
-    API->>DB: Store X402Receipt
-    API-->>Client: 200 Verification result
-    Client-->>Tool: result
-    Tool-->>Agent: result with cost
-```
-
-### 5.2 x402 Client Implementation
-
-```python
-class X402Client:
-    """HTTP client that handles 402 Payment Required responses."""
-    
-    async def call_with_payment(
-        self,
-        url: str,
-        data: dict,
-        claim_id: str
-    ) -> dict:
-        """
-        Make API call, handle 402 with Gateway payment.
-        
-        Args:
-            url: API endpoint URL
-            data: Request payload
-            claim_id: Claim ID for payment tracking
-            
-        Returns:
-            API response data
-        """
-        # Initial request without payment
-        response = await self.http.post(url, json=data)
-        
-        if response.status_code == 402:
-            # Extract payment details from response
-            payment_info = response.json()
-            amount = Decimal(payment_info["amount"])
-            payment_id = payment_info["gateway_payment_id"]
-            
-            # Create payment via Circle Gateway
-            receipt = await self.gateway.create_micropayment(
-                amount=amount,
-                currency="USDC",
-                payment_id=payment_id
-            )
-            
-            # Retry with payment receipt
-            response = await self.http.post(
-                url,
-                json=data,
-                headers={"X-Payment-Receipt": receipt}
-            )
-        
-        response.raise_for_status()
-        return response.json()
-```
-
-### 5.3 Receipt Validation
-
-```python
-def verify_payment_receipt(
-    receipt: str,
-    expected_amount: Decimal,
-    verifier_type: str,
-    claim_id: str,
-    db: Session
-) -> bool:
-    """
-    Validate payment receipt from Circle Gateway.
-    
-    Production implementation would:
-    1. Decode JWT receipt token
-    2. Verify signature with Gateway public key
-    3. Check amount matches expected
-    4. Check payment not already used
-    
-    Demo implementation accepts any non-empty receipt.
-    """
-    if not receipt:
-        return False
-    
-    # Store receipt for audit trail
-    x402_receipt = X402Receipt(
-        id=str(uuid.uuid4()),
-        claim_id=claim_id,
-        verifier_type=verifier_type,
-        amount=expected_amount,
-        gateway_payment_id=receipt[:36],
-        gateway_receipt=receipt,
-        created_at=datetime.utcnow()
-    )
-    db.add(x402_receipt)
-    db.commit()
-    
-    return True
-```
+1. Agent tool (e.g. `verify_document`) calls `x402_client.verify_document(claim_id, path, wallet_address)`.
+2. Client POSTs to `/verifier/document` without receipt → `402` with `X-Payment-Amount`, `X-Gateway-Payment-Id`.
+3. Client calls `gateway.create_micropayment` (or equivalent) for that amount; gets receipt.
+4. Client retries POST with `X-Payment-Receipt`.
+5. Verifier validates receipt, stores `X402Receipt`, runs ADK verifier agent, returns 200 + result.
+6. `wallet_address` is set from `UserWallet` for the insurer before evaluation (`set_wallet_address`).
 
 ---
 
-## 6. Smart Contract Interface
+## 6. Smart contract and settlement
 
-### 6.1 Contract ABI
+### 6.1 ClaimEscrow
 
-```json
-{
-  "abi": [
-    {
-      "name": "depositEscrow",
-      "type": "function",
-      "inputs": [
-        { "name": "claimId", "type": "uint256" },
-        { "name": "amount", "type": "uint256" }
-      ],
-      "outputs": []
-    },
-    {
-      "name": "approveClaim",
-      "type": "function",
-      "inputs": [
-        { "name": "claimId", "type": "uint256" },
-        { "name": "amount", "type": "uint256" },
-        { "name": "recipient", "type": "address" }
-      ],
-      "outputs": []
-    },
-    {
-      "name": "getEscrowBalance",
-      "type": "function",
-      "inputs": [
-        { "name": "claimId", "type": "uint256" }
-      ],
-      "outputs": [
-        { "name": "balance", "type": "uint256" }
-      ],
-      "stateMutability": "view"
-    },
-    {
-      "name": "isSettled",
-      "type": "function",
-      "inputs": [
-        { "name": "claimId", "type": "uint256" }
-      ],
-      "outputs": [
-        { "name": "settled", "type": "bool" }
-      ],
-      "stateMutability": "view"
-    },
-    {
-      "name": "EscrowDeposited",
-      "type": "event",
-      "inputs": [
-        { "name": "claimId", "type": "uint256", "indexed": true },
-        { "name": "depositor", "type": "address", "indexed": true },
-        { "name": "amount", "type": "uint256", "indexed": false }
-      ]
-    },
-    {
-      "name": "ClaimSettled",
-      "type": "event",
-      "inputs": [
-        { "name": "claimId", "type": "uint256", "indexed": true },
-        { "name": "recipient", "type": "address", "indexed": true },
-        { "name": "amount", "type": "uint256", "indexed": false }
-      ]
-    }
-  ]
-}
-```
+- `depositEscrow(claimId, amount)`: insurer deposits USDC for the claim.
+- `approveClaim(claimId, amount, recipient)`: release to claimant; sets `settledClaims[claimId]`.
+- `getEscrowBalance(claimId)`, `isSettled(claimId)`: view.
 
-### 6.2 Settlement Flow
+### 6.2 User-signed settlement (target)
 
-```mermaid
-sequenceDiagram
-    participant Backend
-    participant Contract as ClaimEscrow
-    participant USDC as USDC Token
-    participant Claimant
-    
-    Backend->>Contract: approveClaim(claimId, amount, recipient)
-    
-    Contract->>Contract: require(amount > 0)
-    Contract->>Contract: require(recipient != 0x0)
-    Contract->>Contract: require(!settledClaims[claimId])
-    Contract->>Contract: require(escrowBalances[claimId] >= amount)
-    
-    Contract->>Contract: settledClaims[claimId] = true
-    Contract->>USDC: transfer(recipient, amount)
-    USDC-->>Claimant: USDC tokens
-    Contract->>Contract: escrowBalances[claimId] -= amount
-    
-    Contract-->>Backend: emit ClaimSettled(claimId, recipient, amount)
-```
+From [REAL_USDC_SETTLEMENT.md](REAL_USDC_SETTLEMENT.md):
 
-### 6.3 Gas Estimation
+1. **approve**: `USDC.approve(ClaimEscrow, amount)` via `create_user_contract_execution_challenge` + `sdk.execute(challengeId)`.
+2. **deposit**: `ClaimEscrow.depositEscrow(claimId, amount)`.
+3. **approve_claim**: `ClaimEscrow.approveClaim(claimId, amount, claimant_address)`.
 
-| Function | Estimated Gas | USDC Cost* |
-|----------|--------------|------------|
-| depositEscrow | ~65,000 | ~$0.01 |
-| approveClaim | ~75,000 | ~$0.01 |
-| getEscrowBalance | ~25,000 | Free (view) |
-
-*Assuming Arc gas price ~0.1 gwei equivalent
+Backend provides `challengeId` and related data; frontend performs `sdk.setAuthentication` and `sdk.execute`. No `INSURER_WALLET_PRIVATE_KEY`.
 
 ---
 
-## 7. Error Handling
+## 7. Error handling
 
-### 7.1 HTTP Error Responses
+### 7.1 Common error codes
 
-```python
-class ErrorResponse(BaseModel):
-    """Standard error response format."""
-    detail: str
-    error_code: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+| Code | HTTP | Description |
+|------|------|-------------|
+| INVALID_UUID | 400 | Bad claim ID format |
+| CLAIM_NOT_FOUND | 404 | No claim for ID |
+| PAYMENT_REQUIRED | 402 | x402 payment needed |
+| INVALID_RECEIPT | 400 | Bad or expired receipt |
+| CLAIM_NOT_APPROVED | 400 | Settle only when APPROVED |
+| ALREADY_SETTLED | 409 | claim.status already SETTLED |
+| INSUFFICIENT_ESCROW | 400 | getEscrowBalance &lt; amount |
+| BLOCKCHAIN_ERROR | 500 | Chain/contract failure |
 
-# Example responses
-ERROR_RESPONSES = {
-    400: {"detail": "Invalid request parameters"},
-    401: {"detail": "Authentication required"},
-    402: {"detail": "Payment required", "error_code": "PAYMENT_REQUIRED"},
-    404: {"detail": "Resource not found"},
-    409: {"detail": "Conflict - claim already settled"},
-    422: {"detail": "Validation error"},
-    500: {"detail": "Internal server error"}
-}
-```
+### 7.2 Agent and evaluation
 
-### 7.2 Error Codes
-
-| Code | HTTP Status | Description |
-|------|-------------|-------------|
-| INVALID_UUID | 400 | Claim ID is not valid UUID format |
-| CLAIM_NOT_FOUND | 404 | No claim exists with given ID |
-| PAYMENT_REQUIRED | 402 | x402 payment needed for verifier |
-| INVALID_RECEIPT | 400 | Payment receipt is invalid or expired |
-| CLAIM_NOT_APPROVED | 409 | Cannot settle - claim not approved |
-| ALREADY_SETTLED | 409 | Claim has already been settled |
-| INSUFFICIENT_ESCROW | 400 | Not enough USDC in escrow |
-| BLOCKCHAIN_ERROR | 500 | Transaction failed on Arc |
-
-### 7.3 Retry Strategy
-
-```python
-class RetryConfig:
-    """Configuration for API retry logic."""
-    max_retries: int = 3
-    base_delay: float = 1.0  # seconds
-    max_delay: float = 10.0  # seconds
-    exponential_base: float = 2.0
-    
-    def get_delay(self, attempt: int) -> float:
-        """Calculate delay with exponential backoff."""
-        delay = self.base_delay * (self.exponential_base ** attempt)
-        return min(delay, self.max_delay)
-
-# Retry for transient failures
-RETRYABLE_ERRORS = {
-    502,  # Bad Gateway
-    503,  # Service Unavailable
-    504,  # Gateway Timeout
-}
-```
+- On ADK/API errors, orchestrator returns `create_error_response` with `decision: NEEDS_REVIEW`, `human_review_required: True`, and `review_reasons` including the error. Fallback evaluation may merge in a rule-based result.
 
 ---
 
-## 8. Class Diagrams
+## 8. Class and component overview
 
-### 8.1 Agent Classes
+### 8.1 Agent and tools
 
 ```mermaid
 classDiagram
-    class ClaimEvaluationAgent {
-        -api_key: str
-        -model: str
-        -tools: Dict
-        -client: GenerativeModel
-        +evaluate(claim_id, amount, address, evidence) Dict
-        -_evaluate_with_gemini() Dict
-        -_evaluate_mock() Dict
-        -_calculate_confidence(results) float
-        -_build_reasoning(results) str
+    class ADKOrchestratorAgent {
+        +evaluate_claim(claim_id, claim_amount, claimant_address, evidence) Dict
+        -_ai_evaluation_with_tools() Dict
+        -_fallback_evaluation() Dict
+        -_enforce_decision_rules() str
+        -_validate_tool_calls() Dict
+        -_calculate_confidence_from_results() float
     }
-    
-    class AgentTool {
-        <<interface>>
-        +name: str
-        +description: str
-        +parameters: Dict
-        +execute(args) Dict
+    class adk_tools {
+        <<create_adk_tools>> extraction: extract_document_data, extract_image_data
+        <<create_adk_tools>> cost: estimate_repair_cost, cross_check_amounts
+        <<create_adk_tools>> validation: validate_claim_data
+        <<create_adk_tools>> verification: verify_document, verify_image, verify_fraud
+        <<create_adk_tools>> settlement: approve_claim
     }
-    
-    class VerifyDocumentTool {
-        +name: str = "verify_document"
-        +execute(claim_id, document_path) Dict
+    class tools {
+        verify_document(claim_id, document_path)
+        verify_image(claim_id, image_path)
+        verify_fraud(claim_id)
+        approve_claim(claim_id, amount, recipient)
+        set_wallet_address(addr)
     }
-    
-    class VerifyImageTool {
-        +name: str = "verify_image"
-        +execute(claim_id, image_path) Dict
-    }
-    
-    class VerifyFraudTool {
-        +name: str = "verify_fraud"
-        +execute(claim_id) Dict
-    }
-    
-    class ApproveClaimTool {
-        +name: str = "approve_claim"
-        +execute(claim_id, amount) Dict
-    }
-    
-    AgentTool <|-- VerifyDocumentTool
-    AgentTool <|-- VerifyImageTool
-    AgentTool <|-- VerifyFraudTool
-    AgentTool <|-- ApproveClaimTool
-    ClaimEvaluationAgent --> AgentTool : uses
+    class tools_extraction { extract_document_data, extract_image_data }
+    class tools_cost_estimation { estimate_repair_cost, cross_check_amounts }
+    class tools_validation { validate_claim_data }
+    ADKOrchestratorAgent --> adk_tools : uses
+    adk_tools --> tools : verify_*, approve_claim
+    adk_tools --> tools_extraction
+    adk_tools --> tools_cost_estimation
+    adk_tools --> tools_validation
+    tools --> x402_client
+    tools --> blockchain
 ```
 
-### 8.2 Service Classes
-
-```mermaid
-classDiagram
-    class X402Client {
-        -http: AsyncClient
-        -gateway: GatewayClient
-        +call_with_payment(url, data, claim_id) Dict
-    }
-    
-    class GatewayClient {
-        -api_key: str
-        -base_url: str
-        +create_micropayment(amount, currency, payment_id) str
-        +validate_receipt(receipt) bool
-    }
-    
-    class BlockchainService {
-        -rpc_url: str
-        -contract_address: str
-        -private_key: str
-        +execute_settlement(claim_id, amount, recipient) str
-        +get_escrow_balance(claim_id) Decimal
-        +is_settled(claim_id) bool
-    }
-    
-    X402Client --> GatewayClient : uses
-```
-
----
-
-## 9. Frontend Components
-
-### 9.1 Component Hierarchy
+### 8.2 Frontend components (selected)
 
 ```mermaid
 graph TD
-    subgraph layout [Layout]
-        RootLayout[layout.tsx]
-        Navbar[Navbar]
-        WalletConnect[WalletConnect]
-    end
-    
-    subgraph pages [Pages]
+    subgraph pages
         Landing[page.tsx]
-        Claimant[claimant/page.tsx]
-        Insurer[insurer/page.tsx]
+        Claimant[claimant/page]
+        Insurer[insurer/page]
     end
-    
-    subgraph components [Feature Components]
+    subgraph claimant_components
         ClaimForm[ClaimForm]
         ClaimStatus[ClaimStatus]
         VerificationSteps[VerificationSteps]
+        ExtractedInfoSummary[ExtractedInfoSummary]
+        DataRequestCard[DataRequestCard]
+        EvaluationProgress[EvaluationProgress]
+        WalletDisplay[WalletDisplay]
+    end
+    subgraph insurer_components
+        FinanceKpiStrip[FinanceKpiStrip]
+        InsurerClaimReview[InsurerClaimReview]
         SettlementCard[SettlementCard]
+        AgentResultsBreakdown[AgentResultsBreakdown]
+        AdminFeeTracker[AdminFeeTracker]
+        AutoSettleWalletCard[AutoSettleWalletCard]
+        TxValidationStatus[TxValidationStatus]
+        EnableSettlementsModal[EnableSettlementsModal]
     end
-    
-    subgraph ui [UI Components]
-        Button[Button]
-        Card[Card]
-        Badge[Badge]
-        Input[Input]
-        Modal[Modal]
+    subgraph shared
+        Navbar[Navbar]
+        WalletConnect[WalletConnect]
     end
-    
-    RootLayout --> Navbar
-    Navbar --> WalletConnect
-    
-    Landing --> Button
-    Landing --> Card
-    
     Claimant --> ClaimForm
     Claimant --> ClaimStatus
-    ClaimForm --> Input
-    ClaimForm --> Button
-    ClaimStatus --> VerificationSteps
-    ClaimStatus --> Badge
-    
+    Claimant --> EvaluationProgress
+    Claimant --> DataRequestCard
+    Insurer --> InsurerClaimReview
     Insurer --> SettlementCard
-    SettlementCard --> Card
-    SettlementCard --> Badge
-    SettlementCard --> Button
-```
-
-### 9.2 State Management
-
-```typescript
-// lib/types.ts
-interface ClaimState {
-  currentClaimId: string | null;
-  claim: Claim | null;
-  loading: boolean;
-  error: string | null;
-}
-
-interface WalletState {
-  address: string | undefined;
-  connected: boolean;
-  connecting: boolean;
-}
-
-// Component state flow
-// 1. ClaimForm submits → API returns claim_id
-// 2. claim_id stored in state → triggers ClaimStatus fetch
-// 3. ClaimStatus polls for updates → reflects status changes
-// 4. Settlement triggers blockchain tx → returns tx_hash
+    Insurer --> AdminFeeTracker
+    Insurer --> EnableSettlementsModal
 ```
 
 ---
 
-## 10. Configuration
+## 9. Configuration
 
-### 10.1 Environment Variables
+### 9.1 Backend env (main)
 
 ```bash
-# Backend (.env)
 DATABASE_URL=sqlite:///./claimledger.db
-GOOGLE_AI_API_KEY=your-google-ai-key
+JWT_SECRET_KEY=...
+GOOGLE_AI_API_KEY=...   # or GOOGLE_API_KEY for ADK
 AGENT_MODEL=gemini-2.0-flash
-CIRCLE_GATEWAY_API_KEY=your-gateway-key
-CIRCLE_WALLETS_API_KEY=your-wallets-key
-ARC_RPC_URL=https://arc-testnet.rpc.caldera.xyz/http
-CLAIM_ESCROW_CONTRACT=0x...
-
-# Frontend (.env.local)
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_ARC_RPC_URL=https://arc-testnet.rpc.caldera.xyz/http
-NEXT_PUBLIC_ARC_CHAIN_ID=19850818
-NEXT_PUBLIC_CIRCLE_APP_ID=your-app-id
+CIRCLE_GATEWAY_API_KEY=...
+CIRCLE_WALLETS_API_KEY=...
+ARC_RPC_URL=...
+USDC_ADDRESS=...
+CLAIM_ESCROW_ADDRESS=...
+ADMIN_WALLET_ADDRESS=...  # optional, for admin auto-login
 ```
 
-### 10.2 x402 Pricing Configuration
+### 9.2 x402 / verifier pricing (backend)
 
 ```python
-# backend/src/api/verifier.py
-VERIFIER_PRICING = {
-    "document": Decimal("0.10"),  # $0.10 USDC
-    "image": Decimal("0.15"),     # $0.15 USDC
-    "fraud": Decimal("0.10"),     # $0.10 USDC
-}
+# api/verifier.py
+DOCUMENT_VERIFICATION_PRICE = Decimal("0.05")
+IMAGE_ANALYSIS_PRICE = Decimal("0.10")
+FRAUD_CHECK_PRICE = Decimal("0.05")
 
-# Total expected cost per claim: $0.35 USDC
+# api/agent.py TOOL_COSTS (for tool_calls in EvaluationResponse)
+"verify_document": Decimal("0.05")
+"verify_image": Decimal("0.10")
+"verify_fraud": Decimal("0.05")
 ```
 
----
-
-## 11. Testing Strategy
-
-### 11.1 Unit Tests
-
-```python
-# tests/test_agent.py
-class TestClaimEvaluationAgent:
-    async def test_evaluate_mock_approved(self):
-        """Test agent approves valid claim."""
-        agent = ClaimEvaluationAgent()
-        result = await agent.evaluate(
-            claim_id="test-123",
-            claim_amount=Decimal("1000"),
-            claimant_address="0xABC...",
-            evidence=[{"file_type": "document", "file_path": "..."}]
-        )
-        assert result["decision"] == "APPROVED"
-        assert result["confidence"] >= 0.85
-    
-    async def test_evaluate_mock_needs_review(self):
-        """Test agent flags low confidence claim."""
-        # ... test implementation
-```
-
-### 11.2 Integration Tests
+### 9.3 Frontend env
 
 ```bash
-# scripts/test-e2e.sh
-#!/bin/bash
-
-# 1. Create claim
-CLAIM_ID=$(curl -X POST http://localhost:8000/claims \
-  -F "claimant_address=0xABC..." \
-  -F "claim_amount=1000" | jq -r '.claim_id')
-
-# 2. Trigger evaluation
-curl -X POST "http://localhost:8000/agent/evaluate/$CLAIM_ID"
-
-# 3. Settle claim
-curl -X POST "http://localhost:8000/blockchain/settle/$CLAIM_ID"
-
-# 4. Verify final status
-curl "http://localhost:8000/claims/$CLAIM_ID"
+NEXT_PUBLIC_API_URL=http://localhost:8000
+# Circle App ID and related for Connect / settlement challenges
 ```
 
 ---
 
-## 12. Appendix
+## 10. References
 
-### 12.1 TypeScript Interfaces
-
-```typescript
-// frontend/lib/types.ts
-export type ClaimStatus = 
-  | 'SUBMITTED' 
-  | 'EVALUATING' 
-  | 'APPROVED' 
-  | 'SETTLED' 
-  | 'REJECTED' 
-  | 'NEEDS_REVIEW';
-
-export interface Claim {
-  id: string;
-  claimant_address: string;
-  claim_amount: number;
-  status: ClaimStatus;
-  decision: 'APPROVED' | 'NEEDS_REVIEW' | 'REJECTED' | null;
-  confidence: number | null;
-  approved_amount: number | null;
-  processing_costs: number | null;
-  tx_hash: string | null;
-  created_at: string;
-}
-
-export interface EvaluationResult {
-  claim_id: string;
-  decision: string;
-  confidence: number;
-  approved_amount: number | null;
-  reasoning: string;
-  processing_costs: number;
-}
-
-export interface SettlementResult {
-  claim_id: string;
-  tx_hash: string;
-  amount: number;
-  recipient: string;
-  status: 'SETTLED';
-}
-```
-
-### 12.2 Pydantic Models
-
-```python
-# backend/src/api/claims.py
-class ClaimResponse(BaseModel):
-    id: str
-    claimant_address: str
-    claim_amount: float
-    status: str
-    decision: Optional[str] = None
-    confidence: Optional[float] = None
-    approved_amount: Optional[float] = None
-    processing_costs: Optional[float] = None
-    tx_hash: Optional[str] = None
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-class ClaimCreateResponse(BaseModel):
-    claim_id: str
-    status: str
-```
+- [HLD](HLD.md)
+- [REAL_USDC_SETTLEMENT](REAL_USDC_SETTLEMENT.md)
+- [ENVIRONMENT_VARIABLES](ENVIRONMENT_VARIABLES.md)
+- [SWIFTCLAIM_FRONTEND_UX_CHECKLIST](SWIFTCLAIM_FRONTEND_UX_CHECKLIST.md)
