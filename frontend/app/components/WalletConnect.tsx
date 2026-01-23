@@ -13,10 +13,11 @@ interface WalletConnectProps {
 
 /**
  * WalletConnect Component
- * 
- * Handles authentication and wallet display using our own auth system.
- * Wallets are automatically provisioned via Developer-Controlled Wallets (backend-only).
- * 
+ *
+ * Handles authentication and wallet display. Shows the user-controlled wallet
+ * (manual settlements for admin, payouts for claimant). Programmatic/auto-settle
+ * wallet is shown only on the Admin Dashboard.
+ *
  * No Circle SDK needed - all wallet operations handled by backend.
  */
 export function WalletConnect({ onConnect, onDisconnect, address, role }: WalletConnectProps) {

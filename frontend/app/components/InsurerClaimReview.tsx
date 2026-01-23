@@ -1,13 +1,15 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Claim } from '@/lib/types';
+import { useMemo, useState, useEffect } from 'react';
+import { Claim, type AgentResult } from '@/lib/types';
 import { api } from '@/lib/api';
 import { Card, CardHeader, CardTitle, CardContent, Button, Badge, Input, Modal } from './ui';
 import { ReviewReasonsList } from './ReviewReasonsList';
 import { SummaryCard } from './SummaryCard';
 import { SettlementCard } from './SettlementCard';
 import { EvidenceViewer } from './EvidenceViewer';
+import { ExtractedInfoSummary } from './ExtractedInfoSummary';
+import { TxValidationStatus } from './TxValidationStatus';
 
 export function InsurerClaimReview({
   claim,
@@ -29,8 +31,24 @@ export function InsurerClaimReview({
   const [showOverride, setShowOverride] = useState(false);
   const [overrideDecision, setOverrideDecision] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
   const [overrideAmount, setOverrideAmount] = useState<string>(() => String(claim.approved_amount ?? claim.claim_amount ?? ''));
+  const [agentResults, setAgentResults] = useState<AgentResult[]>([]);
 
   const canSettle = claim.status === 'APPROVED' && !!claim.approved_amount;
+
+  // Fetch agent results for extracted info summary (same as ClaimStatus)
+  useEffect(() => {
+    if (claim.status === 'SUBMITTED' || claim.status === 'EVALUATING') {
+      setAgentResults([]);
+      return;
+    }
+    api.agent.getResults(claim.id)
+      .then((response) => {
+        setAgentResults(response.agent_results || []);
+      })
+      .catch(() => {
+        setAgentResults([]);
+      });
+  }, [claim.id, claim.status]);
 
   const statusHint = useMemo(() => {
     if (claim.status === 'AWAITING_DATA') return 'Awaiting additional evidence from claimant.';
@@ -90,9 +108,11 @@ export function InsurerClaimReview({
               <p className="text-xs admin-text-secondary mt-1">{statusHint}</p>
             </div>
             <div className="text-right">
-              <div className="text-sm admin-text-secondary">Amount</div>
+              <div className="text-sm admin-text-secondary">
+                {claim.status === 'APPROVED' && claim.approved_amount != null ? 'Approved' : 'Amount'}
+              </div>
               <div className="text-xl font-bold admin-text-primary">
-                ${Math.round(claim.claim_amount).toLocaleString()}
+                ${Math.round(claim.approved_amount ?? claim.claim_amount ?? 0).toLocaleString()}
                 <span className="text-sm font-normal text-blue-300 ml-2">USDC</span>
               </div>
             </div>
@@ -141,20 +161,58 @@ export function InsurerClaimReview({
               decision={claim.decision}
               summary={null}
               approvedAmount={claim.approved_amount}
-              processingCosts={claim.processing_costs}
               humanReviewRequired={claim.human_review_required}
             />
+
+            {agentResults.length > 0 && (
+              <ExtractedInfoSummary agentResults={agentResults} />
+            )}
 
             {(claim.decision === 'NEEDS_REVIEW' ||
               claim.decision === 'APPROVED_WITH_REVIEW' ||
               claim.human_review_required) && (
-              <ReviewReasonsList reviewReasons={null} humanReviewRequired={claim.human_review_required} />
+              <ReviewReasonsList
+                reviewReasons={claim.review_reasons ?? null}
+                contradictions={claim.contradictions ?? null}
+                humanReviewRequired={claim.human_review_required}
+              />
             )}
           </div>
 
           {actionError && (
             <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
               {actionError}
+            </div>
+          )}
+
+          {/* Settled: Auto-settled vs Settled by you + tx */}
+          {claim.status === 'SETTLED' && (
+            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+              <p className="text-xs text-emerald-400 mb-1">
+                {claim.auto_settled ? 'Auto-settled' : 'Settled by you'}
+                {claim.tx_hash ? ' · Settlement TX' : ''}
+              </p>
+              {claim.tx_hash && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <code className="text-sm font-mono text-emerald-300">
+                      {claim.tx_hash.slice(0, 16)}...
+                    </code>
+                    <a
+                      href={`https://testnet.arcscan.app/tx/${claim.tx_hash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                    >
+                      Explorer
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </a>
+                  </div>
+                  <TxValidationStatus txHash={claim.tx_hash} className="mt-1.5" />
+                </>
+              )}
             </div>
           )}
 

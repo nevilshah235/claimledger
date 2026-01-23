@@ -153,6 +153,11 @@ export const api = {
       });
     },
 
+    /** Reset a claim stuck in EVALUATING to SUBMITTED so evaluation can be retried. Claimant-only. */
+    resetEvaluating: async (claimId: string): Promise<Claim> => {
+      return fetchAPI<Claim>(`/claims/${claimId}/reset-evaluating`, { method: 'POST' });
+    },
+
     // Get evidence files for a claim
     getEvidence: async (claimId: string): Promise<Array<{
       id: string;
@@ -224,14 +229,48 @@ export const api = {
     },
   },
 
-  // Blockchain Settlement
+  // Blockchain Settlement (User-Controlled wallets + ClaimEscrow)
   blockchain: {
+    /** Get a challenge for one settlement step (approve, deposit, approve_claim). Use with sdk.execute. */
+    settleChallenge: async (
+      claimId: string,
+      step: 'approve' | 'deposit' | 'approve_claim'
+    ): Promise<{
+      challengeId: string;
+      user_token?: string | null;
+      encryption_key?: string | null;
+      step: string;
+      nextStep: string | null;
+    }> => {
+      return fetchAPI(`/blockchain/settle/${claimId}/challenge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ step }),
+      });
+    },
+
+    /** Mark claim SETTLED after last sdk.execute. Optional txHash; if omitted, backend fetches from Circle. */
+    settleComplete: async (
+      claimId: string,
+      data: { transactionId: string; txHash?: string }
+    ): Promise<{ claim_id: string; tx_hash: string; status: string }> => {
+      return fetchAPI(`/blockchain/settle/${claimId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+    },
+
+    /** Fallback when SDK execute does not return transactionId: get most recent CONTRACT_EXECUTION tx for this claim's settlement. */
+    getLatestSettleTransaction: async (claimId: string): Promise<{ transactionId: string }> => {
+      return fetchAPI(`/blockchain/settle/${claimId}/latest-transaction`);
+    },
+
+    /** @deprecated Use settleChallenge + settleComplete. */
     settle: async (claimId: string): Promise<SettlementResult> => {
       return fetchAPI<SettlementResult>(`/blockchain/settle/${claimId}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
     },
@@ -305,25 +344,6 @@ export const api = {
     // Get wallet info
     getWallet: async (): Promise<WalletInfo> => {
       return fetchAPI<WalletInfo>('/auth/wallet');
-    },
-
-    // Admin auto-login
-    adminLogin: async (): Promise<LoginResponse> => {
-      const response = await fetchAPI<LoginResponse>('/auth/admin/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-      
-      // Store token
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('auth_token', response.access_token);
-        localStorage.setItem('user_id', response.user_id);
-        localStorage.setItem('user_role', response.role);
-      }
-      
-      return response;
     },
 
     // Legacy Circle endpoints (deprecated, kept for backward compatibility)
@@ -488,6 +508,10 @@ export const api = {
 
   // Admin endpoints
   admin: {
+    getAutoSettleWallet: async (): Promise<import('./types').AutoSettleWalletResponse> => {
+      return fetchAPI('/admin/auto-settle-wallet');
+    },
+
     getFees: async (): Promise<{
       wallet_address: string | null;
       current_balance: number | null;
@@ -498,6 +522,14 @@ export const api = {
         claim_id: string;
         total_cost: number;
         tool_costs: Record<string, number>;
+        timestamp: string;
+      }>;
+      total_gas_arc: number;
+      gas_breakdown: Array<{
+        claim_id: string;
+        tx_hash: string;
+        gas_used: number;
+        cost_arc: number;
         timestamp: string;
       }>;
     }> => {

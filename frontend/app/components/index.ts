@@ -16,3 +16,4 @@ export { AgentResultsBreakdown } from './AgentResultsBreakdown';
 export { ReviewReasonsList } from './ReviewReasonsList';
 export { EvaluationProgress } from './EvaluationProgress';
 export { DataRequestCard } from './DataRequestCard';
+export { TxValidationStatus } from './TxValidationStatus';

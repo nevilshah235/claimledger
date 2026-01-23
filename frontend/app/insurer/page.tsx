@@ -11,6 +11,7 @@ import { EnableSettlementsModal, useSettlementsEnabled } from '../components/Ena
 import { InsurerClaimReview } from '../components/InsurerClaimReview';
 import { ChatAssistant } from '../components/ChatAssistant';
 import { AdminFeeTracker } from '../components/AdminFeeTracker';
+import { AutoSettleWalletCard } from '../components/AutoSettleWalletCard';
 import { LoginModal } from '../components/LoginModal';
 
 // Claimant Filter Dropdown Component
@@ -177,6 +178,7 @@ export default function InsurerPage() {
   const [adminLoginAvailable, setAdminLoginAvailable] = useState(false);
   const [adminLoginLoading, setAdminLoginLoading] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [feeRefreshTrigger, setFeeRefreshTrigger] = useState(0);
   const [stats, setStats] = useState<Stats>({
     totalClaims: 0,
     approved: 0,
@@ -307,6 +309,7 @@ export default function InsurerPage() {
           isOpen={showEnableSettlements}
           onClose={() => setShowEnableSettlements(false)}
           required={false}
+          role="insurer"
         />
         <LoginModal
           isOpen={isLoginModalOpen}
@@ -336,9 +339,16 @@ export default function InsurerPage() {
             <p className="text-base sm:text-lg admin-text-secondary">Triage claims, review decisions, and settle payouts.</p>
           </div>
 
-          {/* Fee Tracking Section */}
-          <div className="mb-10">
-            <AdminFeeTracker />
+          {/* Admin Wallets: manual (user-controlled) + auto-settle (programmatic) */}
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold admin-text-primary">Admin Wallets</h2>
+            <p className="text-sm admin-text-secondary mt-1">
+              Manual settlements use your connected wallet (user-controlled). Auto-settlements use the programmatic wallet configured on the server.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
+            <AdminFeeTracker refreshTrigger={feeRefreshTrigger} />
+            <AutoSettleWalletCard refreshTrigger={feeRefreshTrigger} />
           </div>
 
           {/* Stats Row */}
@@ -522,6 +532,7 @@ export default function InsurerPage() {
                   claim={selectedClaim}
                   onClaimUpdated={(updated) => {
                     setClaims((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+                    if (updated.status === 'SETTLED') setFeeRefreshTrigger((t) => t + 1);
                   }}
                   settlementsEnabled={settlementsEnabled}
                   onRequireEnableSettlements={() => setShowEnableSettlements(true)}

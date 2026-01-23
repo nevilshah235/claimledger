@@ -14,8 +14,8 @@ interface WalletDisplayProps {
 
 /**
  * WalletDisplay Component
- * 
- * Displays wallet information from backend (Developer-Controlled wallets).
+ *
+ * Displays the user-controlled wallet (manual settlements for admin, payouts for claimant).
  * No Circle SDK needed - all data comes from backend API.
  */
 export function WalletDisplay({ walletAddress, onRefresh, role: roleProp }: WalletDisplayProps) {
@@ -104,7 +104,7 @@ export function WalletDisplay({ walletAddress, onRefresh, role: roleProp }: Wall
       </span>
       {primaryBalance && (
         <span className="text-xs font-medium text-blue-300 font-quando">
-          (Balance: {rawAmount} {tokenSymbol})
+          ({isAdmin ? 'Manual' : 'Balance'}: {rawAmount} {tokenSymbol})
         </span>
       )}
     </div>

@@ -10,7 +10,6 @@ interface SummaryCardProps {
   decision: Decision | null;
   summary?: string | null;
   approvedAmount?: number | null;
-  processingCosts?: number | null;
   humanReviewRequired?: boolean;
 }
 
@@ -52,11 +51,15 @@ function getConfidenceThreshold(confidence: number): string {
 }
 
 function getConfidenceColor(confidence: number): string {
-  if (confidence >= 0.95) return 'text-green-400';
-  if (confidence >= 0.85) return 'text-yellow-400';
-  if (confidence >= 0.70) return 'text-orange-400';
-  if (confidence >= 0.50) return 'text-blue-400';
+  if (confidence >= 0.70) return 'text-green-400';
+  if (confidence >= 0.40) return 'text-yellow-400';
   return 'text-red-400';
+}
+
+function getConfidenceBarColor(confidence: number): string {
+  if (confidence >= 0.70) return 'bg-green-500';
+  if (confidence >= 0.40) return 'bg-yellow-500';
+  return 'bg-red-500';
 }
 
 export function SummaryCard({
@@ -64,7 +67,6 @@ export function SummaryCard({
   decision,
   summary,
   approvedAmount,
-  processingCosts,
   humanReviewRequired,
 }: SummaryCardProps) {
   const confidencePercent = confidence ? Math.round(confidence * 100) : 0;
@@ -105,21 +107,11 @@ export function SummaryCard({
           </div>
           <div className="w-full bg-slate-700 rounded-full h-3">
             <div
-              className={`h-3 rounded-full transition-all duration-300 ${
-                confidence >= 0.95
-                  ? 'bg-green-500'
-                  : confidence >= 0.85
-                  ? 'bg-yellow-500'
-                  : confidence >= 0.70
-                  ? 'bg-orange-500'
-                  : confidence >= 0.50
-                  ? 'bg-blue-500'
-                  : 'bg-red-500'
-              }`}
+              className={`h-3 rounded-full transition-all duration-300 ${getConfidenceBarColor(confidence)}`}
               style={{ width: `${confidencePercent}%` }}
             />
           </div>
-          <p className="text-xs admin-text-secondary mt-1">
+          <p className={`text-xs font-medium mt-1 ${getConfidenceColor(confidence)}`}>
             {getConfidenceThreshold(confidence)}
           </p>
         </div>
@@ -175,24 +167,14 @@ export function SummaryCard({
       )}
 
       {/* Key Metrics */}
-      {(approvedAmount !== null || (processingCosts !== null && processingCosts !== undefined && processingCosts > 0)) && (
-        <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10">
-          {approvedAmount !== null && approvedAmount !== undefined && (
-            <div>
-              <p className="text-xs admin-text-secondary mb-1">Approved Amount</p>
-              <p className="text-lg font-bold text-emerald-400">
-                ${approvedAmount.toFixed(2)} USDC
-              </p>
-            </div>
-          )}
-          {processingCosts !== null && processingCosts !== undefined && processingCosts > 0 && (
-            <div>
-              <p className="text-xs admin-text-secondary mb-1">Processing Cost</p>
-              <p className="text-lg font-bold text-cyan-400">
-                ${processingCosts.toFixed(2)} USDC
-              </p>
-            </div>
-          )}
+      {approvedAmount != null && (
+        <div className="grid grid-cols-1 gap-4 pt-4 border-t border-white/10">
+          <div>
+            <p className="text-xs admin-text-secondary mb-1">Approved Amount</p>
+            <p className="text-lg font-bold text-emerald-400">
+              ${approvedAmount.toFixed(2)} USDC
+            </p>
+          </div>
         </div>
       )}
     </Card>

@@ -185,7 +185,7 @@ export function ClaimForm({ walletAddress, settlementsEnabled, onClaimCreated }:
 
           {/* Info */}
           <p className="text-xs admin-text-secondary text-center">
-            Evaluation costs are covered by the platform
+            Evaluations are free.
           </p>
         </form>
       </CardContent>

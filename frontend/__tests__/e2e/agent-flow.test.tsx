@@ -65,7 +65,7 @@ describe('Agent Flow E2E Tests', () => {
         confidence: 0.75,
         approved_amount: null,
         reasoning: 'Test reasoning',
-        processing_costs: 0.35,
+        processing_costs: 0,
       });
       
       mockApi.claims.get.mockResolvedValue(updatedClaim);
@@ -230,15 +230,31 @@ describe('Agent Flow E2E Tests', () => {
       expect(screen.getByText(/Human Review Required/i)).toBeInTheDocument();
     });
 
-    it('should show generic message when human review required but no reasons', () => {
-      render(
+    it('renders nothing when no review reasons or contradictions', () => {
+      const { container } = render(
         <ReviewReasonsList
           reviewReasons={null}
+          contradictions={null}
           humanReviewRequired={true}
         />
       );
 
-      expect(screen.getByText(/Human Review Required/i)).toBeInTheDocument();
+      expect(container.firstChild).toBeNull();
+    });
+
+    it('should display contradictions when provided', () => {
+      render(
+        <ReviewReasonsList
+          reviewReasons={['Low confidence']}
+          contradictions={['Claim amount (400.0 USD) does not match the extracted total (515.12 USD).']}
+          humanReviewRequired={true}
+        />
+      );
+
+      expect(screen.getByText(/Review Reasons/i)).toBeInTheDocument();
+      expect(screen.getByText(/Low confidence/i)).toBeInTheDocument();
+      expect(screen.getByText(/Contradictions/i)).toBeInTheDocument();
+      expect(screen.getByText(/Claim amount \(400.0 USD\) does not match/i)).toBeInTheDocument();
     });
   });
 

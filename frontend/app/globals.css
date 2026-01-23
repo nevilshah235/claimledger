@@ -382,7 +382,7 @@ body {
 
   .badge-evaluating {
     @apply badge;
-    background: var(--primary);
+    background: var(--blue-cobalt);
     color: white;
     animation: pulse 2s infinite;
   }

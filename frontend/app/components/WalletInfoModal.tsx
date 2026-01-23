@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Image from 'next/image';
 import { Modal, Button } from './ui';
 import { api } from '@/lib/api';
 import { WalletInfo } from '@/lib/types';
+import { useAuth } from '../providers/AuthProvider';
 
 interface WalletInfoModalProps {
   isOpen: boolean;
@@ -13,6 +13,7 @@ interface WalletInfoModalProps {
 }
 
 export function WalletInfoModal({ isOpen, onClose, onWalletNotFound }: WalletInfoModalProps) {
+  const { role } = useAuth();
   const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,38 +76,33 @@ export function WalletInfoModal({ isOpen, onClose, onWalletNotFound }: WalletInf
     }
   };
 
-  const formatAddress = (address: string) => {
-    return `${address.slice(0, 8)}...${address.slice(-8)}`;
-  };
+  const modalTitle = role === 'insurer' ? 'Manual Wallet' : 'Your Wallet';
 
+  const desc =
+    role === 'insurer'
+      ? 'You sign when you click Settle. Fund with USDC and ARC for gas.'
+      : 'Your wallet for receiving claim payouts. Fund with USDC.';
+
+  const usdcBalance = (() => {
+    if (!walletInfo?.balance?.balances?.length) return null;
+    const tb = walletInfo.balance.balances.find(
+      (b: any) => (b.token?.symbol || '').toUpperCase().includes('USDC')
+    );
+    if (!tb) return null;
+    const n = parseFloat(tb.amount || '0') || 0;
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+  })();
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Circle Wallet Information" size="lg">
-      <div className="space-y-6">
-        {/* Header with Circle and Arc logos */}
-        <div className="flex items-center justify-center gap-4 pb-4 border-b border-white/10">
-          <div className="relative h-8 w-auto bg-white rounded-lg px-2 py-1 flex items-center">
-            <Image
-              src="/icons/circle-logo.png"
-              alt="Circle"
-              width={120}
-              height={40}
-              className="h-8 w-auto object-contain"
-              unoptimized
-            />
-          </div>
-          <span className="text-admin-text-secondary">+</span>
-          <div className="relative h-8 w-auto">
-            <Image
-              src="/icons/arc-logo.png"
-              alt="Arc"
-              width={120}
-              height={40}
-              className="h-8 w-auto object-contain"
-              unoptimized
-            />
-          </div>
+    <Modal isOpen={isOpen} onClose={onClose} title={modalTitle} size="lg">
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <span className="px-2 py-0.5 text-xs font-medium rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+            User-Controlled
+          </span>
+          <span className="text-xs admin-text-secondary">{desc}</span>
         </div>
+
         {loading && (
           <div className="flex items-center justify-center py-8">
             <div className="flex flex-col items-center gap-3">
@@ -149,10 +145,10 @@ export function WalletInfoModal({ isOpen, onClose, onWalletNotFound }: WalletInf
 
         {walletInfo && !loading && (
           <>
-            {/* Wallet Address */}
+            {/* Address */}
             <div className="space-y-2">
               <label className="text-xs font-semibold uppercase tracking-wide admin-text-secondary">
-                Wallet Address
+                ADDRESS
               </label>
               <div className="flex items-center gap-2 p-3 rounded-xl bg-white/5 border border-white/10">
                 <code className="flex-1 text-sm font-mono admin-text-primary break-all">
@@ -167,102 +163,28 @@ export function WalletInfoModal({ isOpen, onClose, onWalletNotFound }: WalletInf
               </div>
             </div>
 
-            {/* Balance */}
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase tracking-wide admin-text-secondary">
-                Balance
-              </label>
-              <div className="p-4 rounded-xl bg-gradient-to-r from-blue-cobalt/20 to-blue-navy/20 border border-blue-cobalt/30">
-                {walletInfo.balance && walletInfo.balance.balances && walletInfo.balance.balances.length > 0 ? (
-                  <div className="space-y-3">
-                    {walletInfo.balance.balances.map((tb: any, idx: number) => {
-                      // Show raw token amount, not decimal-adjusted
-                      const amount = parseFloat(tb.amount || '0');
-                      const symbol = tb.token?.symbol || 'Unknown';
-                      const name = tb.token?.name || symbol;
-                      
-                      // Get currency symbol based on token symbol
-                      const getCurrencySymbol = (sym: string) => {
-                        const upperSym = sym.toUpperCase();
-                        if (upperSym.includes('EURC') || upperSym.includes('EUR')) {
-                          return '€';
-                        }
-                        if (upperSym.includes('USDC') || upperSym.includes('USD')) {
-                          return '$';
-                        }
-                        return '';
-                      };
-                      
-                      const currencySymbol = getCurrencySymbol(symbol);
-                      
-                      return (
-                        <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-white/5 border border-white/10">
-                          <div className="flex-1">
-                            <div className="text-sm font-semibold admin-text-primary">{name}</div>
-                            <div className="text-xs admin-text-secondary">{symbol}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-lg font-bold admin-text-primary">
-                              {currencySymbol}{amount.toLocaleString()}
-                            </div>
-                            <div className="text-xs admin-text-secondary">amount</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-center py-4">
-                    <p className="text-sm admin-text-secondary">No tokens found</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Wallet Details */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* USDC Balance + Blockchain */}
+            <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-wide admin-text-secondary">
-                  Circle Wallet ID
+                  USDC BALANCE
                 </label>
-                <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                  <code className="text-sm font-mono admin-text-primary break-all">
-                    {walletInfo.circle_wallet_id || 'N/A'}
-                  </code>
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+                  <span className="text-lg font-bold admin-text-primary">
+                    {usdcBalance ?? '$0.00'}
+                  </span>
                 </div>
               </div>
-
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-wide admin-text-secondary">
-                  Blockchain
+                  BLOCKCHAIN
                 </label>
-                <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                  <span className="text-sm font-medium admin-text-primary">
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+                  <span className="text-lg font-bold text-cyan-400">
                     {walletInfo.blockchain || 'ARC-TESTNET'}
                   </span>
                 </div>
               </div>
-            </div>
-
-            {walletInfo.wallet_set_id && (
-              <div className="space-y-2">
-                <label className="text-xs font-semibold uppercase tracking-wide admin-text-secondary">
-                  Wallet Set ID
-                </label>
-                <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-                  <code className="text-sm font-mono admin-text-primary break-all">
-                    {walletInfo.wallet_set_id}
-                  </code>
-                </div>
-              </div>
-            )}
-
-            {/* Additional Info */}
-            <div className="pt-4 border-t border-white/10">
-              <p className="text-xs admin-text-secondary">
-                This wallet is managed by Circle and connected to your account. 
-                All transactions are processed on the Arc blockchain network.
-              </p>
             </div>
           </>
         )}

@@ -17,9 +17,9 @@ const features = [
   },
   {
     icon: '/icons/circle-logo.png',
-    title: 'x402 Payments',
-    subtitle: 'Circle Gateway',
-    description: 'Real micropayments for each verification step. Pay-per-use AI services.',
+    title: 'Circle Wallets',
+    subtitle: 'Settlement & identity',
+    description: 'User-controlled wallets for USDC settlements and secure sign-in.',
   },
   {
     icon: '/icons/arc-logo.png',
@@ -30,7 +30,7 @@ const features = [
 ];
 
 const stats = [
-  { value: '$0.20', label: 'Per Claim Evaluation' },
+  { value: 'Both', label: 'Manual & Auto modes' },
   { value: '< 30s', label: 'Processing Time' },
   { value: '92%', label: 'AI Confidence' },
   { value: 'Instant', label: 'USDC Settlement' },
@@ -156,7 +156,7 @@ export default function HomePage() {
           setLoginModalRole(undefined);
         }}
         preselectedRole={loginModalRole || 'claimant'}
-        lockRole={loginModalRole === 'claimant'} // Only lock when explicitly 'claimant' (from "File a Claim")
+        lockRole={loginModalRole === 'claimant'} // Only lock when explicitly 'claimant' (from "File Claim")
         onSuccess={handleConnect}
       />
       {/* <ChatAssistant /> */}
@@ -164,17 +164,17 @@ export default function HomePage() {
       {/* Hero Section */}
       <section className="pt-28 pb-16 sm:pb-20 px-4 section-gradient-1">
         <div className="max-w-6xl mx-auto">
-          <div className="text-center lg:text-left">
+          <div className="text-center">
             {/* Title - with fade-in + scale effect */}
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight mb-16 leading-[1.15] headline-fade">
-              <span className="text-text-primary block mb-4">AI-powered evaluation </span>
-              <span className="headline-accent text-gradient-accent block">with audit-ready evidence.</span>
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight mb-4 leading-[1.15] headline-fade">
+              <span className="text-text-primary block mb-4">You Claim, </span>
+              <span className="headline-accent text-gradient-accent block">Instant Payouts</span>
             </h1>
 
-              {/* Subtitle */}
-              <p className="text-lg sm:text-xl text-text-secondary leading-relaxed max-w-2xl mx-auto lg:mx-0">
-                Submit insurance claims, get AI-assisted evaluation, and settle payouts.
-              </p>
+            {/* Subtitle - just below headline */}
+            <p className="text-lg sm:text-xl text-text-secondary leading-relaxed max-w-2xl mx-auto">
+              Submit your claim. AI evaluates. Get paid fast.
+            </p>
           </div>
         </div>
       </section>
@@ -209,7 +209,7 @@ export default function HomePage() {
                 title: 'AI evaluation',
                 description: (
                   <>
-                    Our AI agent powered by <span className="highlight-term">Gemini</span> analyzes your documents, extracts key information, and evaluates your claim with audit-ready evidence.
+                    Our AI agents powered by <span className="highlight-term">Gemini</span> analyzes your documents, extracts key information, and evaluates your claim with audit-ready evidence.
                   </>
                 ),
                 icon: '🤖'
