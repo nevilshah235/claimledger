@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { Quando, Inter } from 'next/font/google';
 import './globals.css';
 import { AppProviders } from './providers/AppProviders';
-import { Web3MoneyBackground } from './components/Web3MoneyBackground';
 
 const quando = Quando({ 
   subsets: ['latin'],
@@ -31,7 +30,6 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${quando.variable} ${inter.variable} font-inter min-h-screen bg-background text-text-primary antialiased`}>
-        <Web3MoneyBackground />
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

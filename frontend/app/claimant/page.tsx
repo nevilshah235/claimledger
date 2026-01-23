@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { Navbar } from '../components/Navbar';
 import { ClaimForm } from '../components/ClaimForm';
 import { ClaimStatus } from '../components/ClaimStatus';
@@ -13,7 +13,7 @@ import { EnableSettlementsModal, useSettlementsEnabled } from '../components/Ena
 import { ChatAssistant } from '../components/ChatAssistant';
 
 export default function ClaimantPage() {
-  const { walletAddress, role, logout, refresh } = useAuth();
+  const { walletAddress, role, logout, refresh, user, loading } = useAuth();
   const { enabled: settlementsEnabled } = useSettlementsEnabled();
   const [showEnableSettlements, setShowEnableSettlements] = useState(false);
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -21,12 +21,141 @@ export default function ClaimantPage() {
   const [showNewClaim, setShowNewClaim] = useState(false);
   const [autoEvaluateClaimId, setAutoEvaluateClaimId] = useState<string | null>(null);
   const [loadingClaims, setLoadingClaims] = useState(false);
+  const modalShownRef = useRef(false); // Track if modal has been shown to prevent premature closing
+  const modalInitializedRef = useRef(false); // Track if we've initialized the modal state
+  const shouldShowModalRef = useRef(false); // Track if modal should be shown (source of truth)
+  
+  // Helper to check if modal should be shown from localStorage (persists across re-renders)
+  const getShouldShowModalFromStorage = () => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('should_show_enable_modal') === 'true';
+  };
+  
+  // Helper to set modal should show in localStorage
+  const setShouldShowModalInStorage = (value: boolean) => {
+    if (typeof window === 'undefined') return;
+    if (value) {
+      localStorage.setItem('should_show_enable_modal', 'true');
+    } else {
+      localStorage.removeItem('should_show_enable_modal');
+    }
+  };
 
-  // Auto-prompt after login (skippable; off-chain features still work)
+  // Listen for enable wallet flow event from WalletInfoModal
   useEffect(() => {
-    if (settlementsEnabled) return;
-    setShowEnableSettlements(true);
+    const handleEnableWalletFlow = (event: Event) => {
+      try {
+        // Prevent event from bubbling and causing issues
+        event.stopPropagation();
+        
+        if (!loading && user && !settlementsEnabled) {
+          shouldShowModalRef.current = true;
+          setShouldShowModalInStorage(true);
+          setShowEnableSettlements(true);
+          modalShownRef.current = true;
+          modalInitializedRef.current = true;
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('enable_wallet_flow');
+            localStorage.removeItem('uclaim_settlements_enabled');
+            // Clear just_registered flag when opened from wallet flow - this is not a new registration
+            localStorage.removeItem('just_registered_claimant');
+          }
+        }
+      } catch (error) {
+        // Silently handle any errors to prevent console noise
+        console.warn('Error handling enableWalletFlow event:', error);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('enableWalletFlow', handleEnableWalletFlow, { passive: true });
+      return () => {
+        window.removeEventListener('enableWalletFlow', handleEnableWalletFlow);
+      };
+    }
+  }, [loading, user, settlementsEnabled]);
+
+  // Auto-prompt when settlements not enabled
+  // Only run once when auth is ready - don't re-run on dependency changes
+  useEffect(() => {
+    // Don't show modal while auth is still loading
+    if (loading) return;
+    
+    // Don't show modal if user is not authenticated
+    if (!user) return;
+    
+    // Only initialize once to prevent premature closing
+    if (modalInitializedRef.current) return;
+    
+    // Mark as initialized immediately to prevent re-runs
+    modalInitializedRef.current = true;
+    
+    // If settlements are already enabled, don't show modal
+    if (settlementsEnabled) {
+      return;
+    }
+    
+    // Check if user just registered (new user) or just logged in
+    const justRegistered = typeof window !== 'undefined' && localStorage.getItem('just_registered_claimant') === 'true';
+    const justLoggedIn = typeof window !== 'undefined' && localStorage.getItem('just_logged_in_claimant') === 'true';
+    const enableWalletFlow = typeof window !== 'undefined' && localStorage.getItem('enable_wallet_flow') === 'true';
+    
+    // Show modal if settlements are not enabled AND:
+    // 1. User just registered, OR
+    // 2. User just logged in, OR
+    // 3. Enable wallet flow was triggered, OR
+    // 4. User doesn't have a wallet address
+    const shouldShowModal = enableWalletFlow || justRegistered || justLoggedIn || !walletAddress;
+    
+    if (shouldShowModal) {
+      shouldShowModalRef.current = true; // Set ref first (source of truth)
+      setShouldShowModalInStorage(true); // Persist in localStorage
+      setShowEnableSettlements(true);
+      modalShownRef.current = true;
+      
+      // Clear the flags after showing modal (but keep just_registered for required check)
+      if (justLoggedIn && typeof window !== 'undefined' && !justRegistered) {
+        localStorage.removeItem('just_logged_in_claimant');
+      }
+      if (enableWalletFlow && typeof window !== 'undefined') {
+        localStorage.removeItem('enable_wallet_flow');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, user]); // Only depend on loading and user - not settlementsEnabled or walletAddress
+
+  // Separate effect to handle settlements becoming enabled (close modal)
+  // This is the ONLY place where we close the modal automatically
+  useEffect(() => {
+    // Only close if settlements are actually enabled AND modal should be shown
+    if (settlementsEnabled && (shouldShowModalRef.current || getShouldShowModalFromStorage())) {
+      shouldShowModalRef.current = false;
+      setShouldShowModalInStorage(false);
+      setShowEnableSettlements(false);
+      modalShownRef.current = false;
+      // Don't reset modalInitializedRef - user has completed setup
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('just_logged_in_claimant');
+        localStorage.removeItem('just_registered_claimant');
+        localStorage.removeItem('enable_wallet_flow');
+        localStorage.removeItem('should_show_enable_modal');
+      }
+    }
   }, [settlementsEnabled]);
+
+  // Sync state with ref and localStorage - these are sources of truth
+  // This ensures the modal stays open once shown, even across re-renders
+  // Run this check periodically to restore modal if it was closed unexpectedly
+  useEffect(() => {
+    if (settlementsEnabled) return; // Don't check if settlements are enabled
+    
+    const shouldShow = shouldShowModalRef.current || getShouldShowModalFromStorage();
+    // If ref or storage says modal should be open, ensure state matches
+    if (shouldShow && !showEnableSettlements) {
+      setShowEnableSettlements(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settlementsEnabled]); // Only check when settlementsEnabled changes
 
   // Handle wallet connection
   const handleConnect = (address: string, role: string) => {
@@ -100,34 +229,74 @@ export default function ClaimantPage() {
 
   return (
     <RequireRole role="claimant">
-      <div className="min-h-screen">
+      <div className="admin-page min-h-screen relative">
         <EnableSettlementsModal
           isOpen={showEnableSettlements}
-          onClose={() => setShowEnableSettlements(false)}
-          required={false}
+          onClose={() => {
+            // Check if this is a new registration - if so, don't allow closing
+            const justRegistered = typeof window !== 'undefined' && localStorage.getItem('just_registered_claimant') === 'true';
+            if (justRegistered) {
+              // Don't allow closing for new registrations until wallet is set up
+              return;
+            }
+            // Only allow closing if user explicitly closes it
+            shouldShowModalRef.current = false; // Update ref (source of truth)
+            setShouldShowModalInStorage(false); // Clear from storage
+            setShowEnableSettlements(false);
+            modalShownRef.current = false;
+            // Don't reset modalInitializedRef - once shown, we don't want to show it again automatically
+            // Clear the flags when modal is closed
+            if (typeof window !== 'undefined') {
+              localStorage.removeItem('just_logged_in_claimant');
+              localStorage.removeItem('just_registered_claimant');
+            }
+          }}
+          required={typeof window !== 'undefined' && localStorage.getItem('just_registered_claimant') === 'true'}
         />
-        <ChatAssistant claimId={selectedClaimId} />
+        {/* <ChatAssistant claimId={selectedClaimId} /> */}
         <Navbar
           onConnect={handleConnect}
           onDisconnect={handleDisconnect}
         />
 
-        <main className="pt-24 pb-12 px-4">
+        <main className="pt-28 pb-16 px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="max-w-6xl mx-auto">
             {/* Header */}
-            <div className="text-center mb-10">
-              <h1 className="text-3xl font-bold text-white mb-2">Claims</h1>
-              <p className="text-slate-400">Submit a claim, track status, and respond to evidence requests.</p>
+            <div className="text-center mb-12">
+              <h1 className="text-4xl sm:text-5xl font-bold admin-text-primary mb-3">Claims</h1>
+              <p className="text-base sm:text-lg admin-text-secondary">Submit a claim, track status, and respond to evidence requests.</p>
             </div>
 
             <div className="grid lg:grid-cols-12 gap-6">
               {/* Left: History */}
               <div className="lg:col-span-4">
-                <Card className="mb-4">
+                {/* Wallet Status Card */}
+                {walletAddress && !settlementsEnabled && (
+                  <Card className="admin-card mb-4 border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-orange-500/10">
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-sm font-semibold admin-text-primary mb-1">Enable On-Chain Payments</p>
+                        <p className="text-xs admin-text-secondary">
+                          Connect your wallet to receive on-chain payouts when claims are approved.
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => setShowEnableSettlements(true)}
+                        className="w-full bg-gradient-to-r from-amber-400 via-yellow-400 to-orange-400 hover:from-amber-500 hover:via-yellow-500 hover:to-orange-500 text-white font-semibold shadow-lg shadow-amber-500/30"
+                      >
+                        <span className="mr-2">✨</span>
+                        Enable Wallet
+                      </Button>
+                    </div>
+                  </Card>
+                )}
+                
+                <Card className="admin-card mb-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-medium text-white">Your claims</p>
-                      <p className="text-xs text-slate-400">{claims.length} total</p>
+                      <p className="text-sm font-medium admin-text-primary">Your claims</p>
+                      <p className="text-xs admin-text-secondary">{claims.length} total</p>
                     </div>
                     <Button
                       size="sm"
@@ -142,13 +311,13 @@ export default function ClaimantPage() {
                 </Card>
 
                 {loadingClaims ? (
-                  <Card className="py-8 text-center">
-                    <p className="text-slate-400 text-sm">Loading claims…</p>
+                  <Card className="admin-card py-8 text-center">
+                    <p className="admin-text-secondary text-sm">Loading claims…</p>
                   </Card>
                 ) : claims.length === 0 ? (
-                  <Card className="py-10 text-center">
-                    <p className="text-slate-300 font-medium mb-2">No claims yet</p>
-                    <p className="text-sm text-slate-500 mb-4">Submit a claim to start evaluation.</p>
+                  <Card className="admin-card py-10 text-center">
+                    <p className="admin-text-secondary font-medium mb-2">No claims yet</p>
+                    <p className="text-sm admin-text-secondary mb-4">Submit a claim to start evaluation.</p>
                     <Button
                       onClick={() => {
                         setShowNewClaim(true);
@@ -168,22 +337,22 @@ export default function ClaimantPage() {
                           setSelectedClaimId(c.id);
                           setShowNewClaim(false);
                         }}
-                        className={`w-full text-left p-3 rounded-xl border transition-colors ${
+                        className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 admin-card ${
                           selectedClaimId === c.id
-                            ? 'border-cyan-500/40 bg-cyan-500/10'
-                            : 'border-white/10 bg-white/5 hover:bg-white/10'
+                            ? 'border-blue-cobalt bg-blue-cobalt/20 shadow-lg shadow-blue-cobalt/20 scale-[1.02]'
+                            : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20 hover:scale-[1.01]'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-white truncate">#{c.id.slice(0, 8)}</p>
-                            <p className="text-xs text-slate-400 truncate">
+                            <p className="text-sm font-semibold admin-text-primary truncate">#{c.id.slice(0, 8)}</p>
+                            <p className="text-xs admin-text-secondary truncate">
                               {c.description || 'No description'}
                             </p>
                           </div>
                           <div className="flex flex-col items-end">
-                            <span className="text-xs text-slate-300">{statusLabel(c)}</span>
-                            <span className="text-xs text-slate-500">
+                            <span className="text-xs admin-text-secondary">{statusLabel(c)}</span>
+                            <span className="text-xs admin-text-secondary">
                               ${Math.round(c.claim_amount).toLocaleString()}
                             </span>
                           </div>
@@ -197,7 +366,11 @@ export default function ClaimantPage() {
               {/* Right: Detail */}
               <div className="lg:col-span-8">
                 {showNewClaim ? (
-                  <ClaimForm walletAddress={walletAddress ?? undefined} onClaimCreated={handleClaimCreated} />
+                  <ClaimForm 
+                    walletAddress={walletAddress ?? undefined} 
+                    settlementsEnabled={settlementsEnabled}
+                    onClaimCreated={handleClaimCreated} 
+                  />
                 ) : selectedClaim ? (
                   <ClaimStatus
                     claim={selectedClaim}
@@ -210,15 +383,15 @@ export default function ClaimantPage() {
                     autoStartEvaluation={selectedClaim.id === autoEvaluateClaimId}
                   />
                 ) : (
-                  <Card className="h-full flex items-center justify-center min-h-[300px]">
+                  <Card className="admin-card h-full flex items-center justify-center min-h-[300px]">
                     <div className="text-center">
                       <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mx-auto mb-4">
-                        <svg className="w-8 h-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-8 h-8 admin-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                       </div>
-                      <p className="text-slate-400 mb-2">Select a claim</p>
-                      <p className="text-sm text-slate-500">Choose a claim on the left or start a new one.</p>
+                      <p className="admin-text-secondary mb-2">Select a claim</p>
+                      <p className="text-sm admin-text-secondary">Choose a claim on the left or start a new one.</p>
                     </div>
                   </Card>
                 )}

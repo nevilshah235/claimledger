@@ -6,10 +6,11 @@ import { api } from '@/lib/api';
 
 interface ClaimFormProps {
   walletAddress?: string;
+  settlementsEnabled?: boolean;
   onClaimCreated: (claimId: string) => void;
 }
 
-export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
+export function ClaimForm({ walletAddress, settlementsEnabled, onClaimCreated }: ClaimFormProps) {
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [files, setFiles] = useState<File[]>([]);
@@ -65,9 +66,9 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
   };
 
   return (
-    <Card>
+    <Card className="admin-card">
       <CardHeader>
-        <CardTitle>Submit New Claim</CardTitle>
+        <CardTitle className="admin-text-primary">Submit New Claim</CardTitle>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -80,7 +81,7 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
             placeholder="0.00"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            rightIcon={<span className="text-sm text-slate-400">USDC</span>}
+            rightIcon={<span className="text-sm admin-text-secondary">USDC</span>}
           />
 
           {/* Description */}
@@ -94,7 +95,7 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
 
           {/* File Upload */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
+            <label className="block text-sm font-medium admin-text-primary mb-2">
               Evidence Files
             </label>
             <div className="space-y-3">
@@ -102,13 +103,13 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full p-4 border-2 border-dashed border-slate-600 rounded-xl hover:border-cyan-500/50 hover:bg-white/5 transition-all cursor-pointer"
+                className="w-full p-4 border-2 border-dashed border-white/20 rounded-xl hover:border-blue-cobalt/50 hover:bg-white/5 transition-all cursor-pointer"
               >
                 <div className="flex flex-col items-center gap-2">
-                  <svg className="w-8 h-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-8 h-8 admin-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                   </svg>
-                  <span className="text-sm text-slate-400">
+                  <span className="text-sm admin-text-secondary">
                     Click to upload files (images, documents)
                   </span>
                 </div>
@@ -133,17 +134,17 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
                     >
                       <div className="flex items-center gap-3">
                         {file.type.startsWith('image/') ? (
-                          <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <svg className="w-5 h-5 admin-text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                           </svg>
                         ) : (
-                          <svg className="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <svg className="w-5 h-5 admin-text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                           </svg>
                         )}
                         <div>
-                          <p className="text-sm text-white">{file.name}</p>
-                          <p className="text-xs text-slate-400">
+                          <p className="text-sm admin-text-primary">{file.name}</p>
+                          <p className="text-xs admin-text-secondary">
                             {(file.size / 1024).toFixed(1)} KB
                           </p>
                         </div>
@@ -153,7 +154,7 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
                         onClick={() => removeFile(index)}
                         className="p-1 rounded hover:bg-white/10 transition-colors"
                       >
-                        <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg className="w-4 h-4 admin-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                         </svg>
                       </button>
@@ -177,14 +178,14 @@ export function ClaimForm({ walletAddress, onClaimCreated }: ClaimFormProps) {
             className="w-full"
             size="lg"
             loading={loading}
-            disabled={!walletAddress}
+            disabled={!settlementsEnabled}
           >
-            {!walletAddress ? 'Connect Wallet to Submit' : 'Submit Claim'}
+            {!settlementsEnabled ? 'Enable Settlements to Submit' : 'Submit Claim'}
           </Button>
 
           {/* Info */}
-          <p className="text-xs text-slate-400 text-center">
-            Evaluation cost: ~$0.35 USDC (x402 micropayments)
+          <p className="text-xs admin-text-secondary text-center">
+            Evaluation costs are covered by the platform
           </p>
         </form>
       </CardContent>

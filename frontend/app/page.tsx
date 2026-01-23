@@ -5,7 +5,7 @@ import { Navbar } from './components/Navbar';
 import { Card } from './components/ui/Card';
 import { api } from '@/lib/api';
 import { ChatAssistant } from './components/ChatAssistant';
-import { FinanceKpiStrip } from './components/FinanceKpiStrip';
+import { LoginModal } from './components/LoginModal';
 import Image from 'next/image';
 
 const features = [
@@ -30,7 +30,7 @@ const features = [
 ];
 
 const stats = [
-  { value: '$0.35', label: 'Per Claim Evaluation' },
+  { value: '$0.20', label: 'Per Claim Evaluation' },
   { value: '< 30s', label: 'Processing Time' },
   { value: '92%', label: 'AI Confidence' },
   { value: 'Instant', label: 'USDC Settlement' },
@@ -40,6 +40,8 @@ export default function HomePage() {
   const [walletAddress, setWalletAddress] = useState<string | undefined>();
   const [userRole, setUserRole] = useState<string | undefined>();
   const [revealed, setRevealed] = useState<Set<string>>(() => new Set());
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [loginModalRole, setLoginModalRole] = useState<'claimant' | 'insurer' | undefined>();
 
   // Handle wallet connection
   const handleConnect = (address: string, role: string) => {
@@ -142,21 +144,35 @@ export default function HomePage() {
       <Navbar 
         onConnect={handleConnect}
         onDisconnect={handleDisconnect}
+        onOpenLoginModal={(role) => {
+          setLoginModalRole(role);
+          setIsLoginModalOpen(true);
+        }}
       />
-      <ChatAssistant />
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => {
+          setIsLoginModalOpen(false);
+          setLoginModalRole(undefined);
+        }}
+        preselectedRole={loginModalRole || 'claimant'}
+        lockRole={loginModalRole === 'claimant'} // Only lock when explicitly 'claimant' (from "File a Claim")
+        onSuccess={handleConnect}
+      />
+      {/* <ChatAssistant /> */}
       
       {/* Hero Section */}
-      <section className="pt-24 pb-14 sm:pb-16 px-4 section-gradient-1">
+      <section className="pt-28 pb-16 sm:pb-20 px-4 section-gradient-1">
         <div className="max-w-6xl mx-auto">
           <div className="text-center lg:text-left">
             {/* Title - with fade-in + scale effect */}
-            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight mb-6 leading-[1.05] headline-fade">
-              <span className="text-text-primary">AI-powered evaluation </span>
-              <span className="headline-accent text-gradient-accent">with audit-ready evidence.</span>
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight mb-16 leading-[1.15] headline-fade">
+              <span className="text-text-primary block mb-4">AI-powered evaluation </span>
+              <span className="headline-accent text-gradient-accent block">with audit-ready evidence.</span>
             </h1>
 
               {/* Subtitle */}
-              <p className="text-lg sm:text-xl text-text-secondary leading-7 max-w-2xl mx-auto lg:mx-0 mb-8">
+              <p className="text-lg sm:text-xl text-text-secondary leading-relaxed max-w-2xl mx-auto lg:mx-0">
                 Submit insurance claims, get AI-assisted evaluation, and settle payouts.
               </p>
           </div>
@@ -173,7 +189,7 @@ export default function HomePage() {
           <div className="text-center mb-16">
             <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-snug mb-4">
               <span className="text-text-primary">Three steps to </span>
-              <span className="text-gradient-primary">your claim</span>
+              <span className="text-gradient-accent font-extrabold">your claim</span>
             </h2>
             <p className="text-lg text-text-secondary max-w-2xl mx-auto">
               That's three steps closer to fast, secure claim processing.
@@ -191,13 +207,21 @@ export default function HomePage() {
               {
                 number: '2',
                 title: 'AI evaluation',
-                description: 'Our AI agent powered by Gemini analyzes your documents, extracts key information, and evaluates your claim with audit-ready evidence.',
+                description: (
+                  <>
+                    Our AI agent powered by <span className="highlight-term">Gemini</span> analyzes your documents, extracts key information, and evaluates your claim with audit-ready evidence.
+                  </>
+                ),
                 icon: '🤖'
               },
               {
                 number: '3',
                 title: 'Instant settlement',
-                description: 'Get approved claims settled instantly in USDC on the Arc blockchain. Transparent, verifiable, and secure.',
+                description: (
+                  <>
+                    Get approved claims settled instantly in USDC on the <span className="highlight-term">Arc blockchain</span>. Transparent, verifiable, and secure.
+                  </>
+                ),
                 icon: '✅'
               }
             ].map((step, index) => (
@@ -212,7 +236,7 @@ export default function HomePage() {
                   {step.title}
                 </h3>
                 <p className="text-base text-text-secondary leading-7">
-                  {step.description}
+                  {typeof step.description === 'string' ? step.description : step.description}
                 </p>
               </div>
             ))}
@@ -254,15 +278,17 @@ export default function HomePage() {
                   
                   {/* Icon */}
                   <div className="mb-4 flex items-center justify-start min-h-[60px] overflow-visible w-full">
-                    <Image
-                      src={feature.icon}
-                      alt={feature.title}
-                      width={220}
-                      height={56}
-                      className="h-14 sm:h-16 w-auto object-contain object-left"
-                      style={{ maxWidth: 'none' }}
-                      unoptimized
-                    />
+                    <div className="logo-container">
+                      <Image
+                        src={feature.icon}
+                        alt={feature.title}
+                        width={220}
+                        height={56}
+                        className="h-14 sm:h-16 w-auto object-contain object-left logo-image"
+                        style={{ maxWidth: 'none' }}
+                        unoptimized
+                      />
+                    </div>
                   </div>
 
                   {/* Content */}
@@ -281,16 +307,14 @@ export default function HomePage() {
         </div>
       </section>
 
-      <FinanceKpiStrip />
-
       {/* Trust / Safety Section */}
       <section
         id="trust"
         data-reveal-id="trust"
-        className={`scroll-mt-16 py-20 px-4 section-reveal section-gradient-2 section-transition ${revealed.has('trust') ? 'is-visible' : ''}`}
+        className={`scroll-mt-16 py-20 px-4 section-reveal section-gradient-trust section-transition ${revealed.has('trust') ? 'is-visible' : ''}`}
       >
         <div className="max-w-6xl mx-auto">
-          <div className="rounded-3xl bg-white/60 backdrop-blur-[2px] border border-border shadow-sm px-6 sm:px-10 py-10">
+          <div className="rounded-3xl bg-white/85 backdrop-blur-[4px] border border-border shadow-lg px-6 sm:px-10 py-10">
             <div className="text-center mb-10">
               <h2 className="text-2xl sm:text-3xl font-bold tracking-tight leading-snug mb-3">
                 <span className="text-text-primary">Built for </span>
@@ -330,8 +354,9 @@ export default function HomePage() {
 
       {/* Metrics (moved to bottom) */}
       <section
+        id="metrics"
         data-reveal-id="metrics"
-        className={`py-12 px-4 section-reveal section-gradient-1 ${revealed.has('metrics') ? 'is-visible' : ''}`}
+        className={`scroll-mt-16 py-12 px-4 section-reveal section-gradient-1 ${revealed.has('metrics') ? 'is-visible' : ''}`}
       >
         <div className="max-w-6xl mx-auto">
           <div className="rounded-3xl bg-white/75 backdrop-blur-[2px] border border-border shadow-sm px-6 sm:px-10 py-10">
@@ -363,9 +388,9 @@ export default function HomePage() {
             <Image
               src="/uclaim-logo-transparent.png"
               alt="UClaim"
-              width={120}
-              height={30}
-              className="h-6 w-auto"
+              width={240}
+              height={60}
+              className="h-16 w-auto"
               unoptimized
             />
             <span className="sr-only">UClaim</span>

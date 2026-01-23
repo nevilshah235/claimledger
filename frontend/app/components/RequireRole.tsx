@@ -20,7 +20,8 @@ export function RequireRole({
     if (loading) return;
 
     if (!user) {
-      router.replace(`/login?role=${role}`);
+      // Redirect to home page instead of deprecated login page
+      router.replace('/');
       return;
     }
 

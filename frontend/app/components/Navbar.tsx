@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { WalletConnect } from './WalletConnect';
-import { LoginDropdown } from './LoginDropdown';
 import { UserMenu } from './UserMenu';
 import { Button } from './ui';
 import { useAuth } from '../providers/AuthProvider';
@@ -14,9 +13,10 @@ interface NavbarProps {
   role?: string;
   onConnect?: (address: string, role: string) => void;
   onDisconnect?: () => void;
+  onOpenLoginModal?: (role?: 'claimant' | 'insurer') => void;
 }
 
-export function Navbar({ walletAddress, role, onConnect, onDisconnect }: NavbarProps) {
+export function Navbar({ walletAddress, role, onConnect, onDisconnect, onOpenLoginModal }: NavbarProps) {
   const { user, token, walletAddress: authWalletAddress, role: authRole, loading } = useAuth();
   const [mounted, setMounted] = useState(false);
   
@@ -33,24 +33,28 @@ export function Navbar({ walletAddress, role, onConnect, onDisconnect }: NavbarP
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 pt-4 px-4">
-      <div className="navbar-floating max-w-7xl mx-auto">
-        <div className="px-4 sm:px-6 lg:px-8 py-3">
-          <div className="flex items-center justify-between h-10">
-            {/* Brand (compact) */}
-            <Link href="/" className="shrink-0 flex items-center">
-              <Image
-                src="/uclaim-logo-transparent.png"
-                alt="UClaim"
-                width={220}
-                height={60}
-                className="h-40 sm:h-70 w-auto mt-5"
-                unoptimized
-                priority
-              />
-            </Link>
+      <div className="navbar-floating max-w-7xl mx-auto overflow-visible">
+        <div className="px-4 sm:px-6 lg:px-8 py-3 overflow-visible">
+          <div className="flex items-center h-10 overflow-visible w-full relative">
+            {/* Left section: Logo */}
+            <div className="flex items-center gap-6 lg:gap-8 shrink-0">
+              {/* Brand (compact) */}
+              <Link href="/" className="shrink-0 flex items-center">
+                <Image
+                  src="/uclaim-logo-transparent.png"
+                  alt="UClaim"
+                  width={220}
+                  height={60}
+                  className="h-40 sm:h-70 w-auto mt-5"
+                  unoptimized
+                  priority
+                />
+              </Link>
+            </div>
 
-            {/* Links */}
-            <div className="hidden md:flex items-center gap-6 text-sm font-semibold text-text-secondary">
+            {/* Center section: Dashboard text - absolutely centered */}
+            <div className="absolute left-1/2 transform -translate-x-1/2 hidden md:block">
+              <div className="flex items-center gap-4 lg:gap-6 text-sm font-semibold text-text-secondary font-quando">
               {isAuthenticated && effectiveRole ? (
                 <Link 
                   href={effectiveRole === 'insurer' ? '/insurer' : '/claimant'} 
@@ -59,34 +63,54 @@ export function Navbar({ walletAddress, role, onConnect, onDisconnect }: NavbarP
                   {effectiveRole === 'insurer' ? 'Admin Dashboard' : 'Claimant Dashboard'}
                 </Link>
               ) : (
-                <Link href="/#claim-flow" className="hover:text-text-primary transition-colors">
-                  How it works
-                </Link>
+                <>
+                  <Link href="/#steps" className="hover:text-text-primary transition-colors whitespace-nowrap">
+                    How It Works
+                  </Link>
+                  <Link href="/#claim-flow" className="hover:text-text-primary transition-colors whitespace-nowrap">
+                    Technology
+                  </Link>
+                  <Link href="/#trust" className="hover:text-text-primary transition-colors whitespace-nowrap">
+                    Security
+                  </Link>
+                  <Link href="/#metrics" className="hover:text-text-primary transition-colors whitespace-nowrap">
+                    Performance
+                  </Link>
+                </>
               )}
+              </div>
             </div>
 
-            {/* Auth/Wallet */}
-            <div className="flex items-center gap-3">
+            {/* Auth/Wallet - pushed to the right */}
+            <div className="flex items-center gap-3 relative z-50 shrink-0 ml-auto">
               {isAuthenticated ? (
                 <>
-                  {effectiveWalletAddress && (
-                    <WalletConnect
-                      address={effectiveWalletAddress}
-                      role={effectiveRole}
-                      onConnect={onConnect || (() => {})}
-                      onDisconnect={onDisconnect || (() => {})}
-                    />
-                  )}
+                  <WalletConnect
+                    address={effectiveWalletAddress || undefined}
+                    role={effectiveRole}
+                    onConnect={onConnect || (() => {})}
+                    onDisconnect={onDisconnect || (() => {})}
+                  />
                   <UserMenu align="right" />
                 </>
               ) : (
                 <>
-                  <Link href="/login?role=claimant">
-                    <Button variant="primary" size="sm">
-                      File a claim
-                    </Button>
-                  </Link>
-                  <LoginDropdown buttonLabel="Sign in" variant="secondary" size="sm" align="right" />
+                  <Button 
+                    variant="primary" 
+                    size="sm"
+                    onClick={() => onOpenLoginModal?.('claimant')}
+                    className="font-quando"
+                  >
+                    File a claim
+                  </Button>
+                  <Button 
+                    variant="secondary" 
+                    size="sm"
+                    onClick={() => onOpenLoginModal?.()}
+                    className="font-quando"
+                  >
+                    Sign in
+                  </Button>
                 </>
               )}
             </div>
