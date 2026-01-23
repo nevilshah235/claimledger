@@ -203,7 +203,9 @@ export function AgentResultsBreakdown({ claimId, toolCalls }: AgentResultsBreakd
                     <div className="flex items-center gap-2 mt-1">
                       <div className="w-24 bg-slate-700 rounded-full h-1.5">
                         <div
-                          className="bg-cyan-400 h-1.5 rounded-full"
+                          className={`h-1.5 rounded-full ${
+                            agentResult.confidence >= 0.70 ? 'bg-green-500' : agentResult.confidence >= 0.40 ? 'bg-yellow-500' : 'bg-red-500'
+                          }`}
                           style={{ width: `${confidencePercent}%` }}
                         />
                       </div>

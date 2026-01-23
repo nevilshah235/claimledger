@@ -4,13 +4,22 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { Navbar } from '../components/Navbar';
 import { ClaimForm } from '../components/ClaimForm';
 import { ClaimStatus } from '../components/ClaimStatus';
-import { Card, Button } from '../components/ui';
+import { Card, Button, Badge } from '../components/ui';
 import { Claim } from '@/lib/types';
 import { api } from '@/lib/api';
 import { RequireRole } from '../components/RequireRole';
 import { useAuth } from '../providers/AuthProvider';
 import { EnableSettlementsModal, useSettlementsEnabled } from '../components/EnableSettlementsModal';
 import { ChatAssistant } from '../components/ChatAssistant';
+
+export type StatusFilter = '' | 'needs_review' | 'rejected' | 'submitted' | 'approved';
+
+const STATUS_FILTER_MAP: Record<Exclude<StatusFilter, ''>, string[]> = {
+  needs_review: ['NEEDS_REVIEW', 'AWAITING_DATA'],
+  rejected: ['REJECTED'],
+  submitted: ['SUBMITTED', 'EVALUATING'],
+  approved: ['APPROVED', 'SETTLED'],
+};
 
 export default function ClaimantPage() {
   const { walletAddress, role, logout, refresh, user, loading } = useAuth();
@@ -21,6 +30,7 @@ export default function ClaimantPage() {
   const [showNewClaim, setShowNewClaim] = useState(false);
   const [autoEvaluateClaimId, setAutoEvaluateClaimId] = useState<string | null>(null);
   const [loadingClaims, setLoadingClaims] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
   const modalShownRef = useRef(false); // Track if modal has been shown to prevent premature closing
   const modalInitializedRef = useRef(false); // Track if we've initialized the modal state
   const shouldShowModalRef = useRef(false); // Track if modal should be shown (source of truth)
@@ -201,31 +211,16 @@ export default function ClaimantPage() {
     setClaims((prev) => prev.map((c) => (c.id === updatedClaim.id ? updatedClaim : c)));
   };
 
+  const filteredClaims = useMemo(() => {
+    if (!statusFilter) return claims;
+    const statuses = STATUS_FILTER_MAP[statusFilter];
+    return claims.filter((c) => statuses.includes(c.status));
+  }, [claims, statusFilter]);
+
   const selectedClaim = useMemo(() => {
     if (!selectedClaimId) return null;
     return claims.find((c) => c.id === selectedClaimId) || null;
   }, [claims, selectedClaimId]);
-
-  const statusLabel = (c: Claim) => {
-    switch (c.status) {
-      case 'SUBMITTED':
-        return 'Submitted';
-      case 'EVALUATING':
-        return 'In review';
-      case 'AWAITING_DATA':
-        return 'Needs info';
-      case 'NEEDS_REVIEW':
-        return 'Needs manual review';
-      case 'APPROVED':
-        return 'Approved';
-      case 'SETTLED':
-        return 'Settled';
-      case 'REJECTED':
-        return 'Rejected';
-      default:
-        return c.status;
-    }
-  };
 
   return (
     <RequireRole role="claimant">
@@ -252,6 +247,7 @@ export default function ClaimantPage() {
             }
           }}
           required={typeof window !== 'undefined' && localStorage.getItem('just_registered_claimant') === 'true'}
+          role="claimant"
         />
         {/* <ChatAssistant claimId={selectedClaimId} /> */}
         <Navbar
@@ -296,7 +292,11 @@ export default function ClaimantPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium admin-text-primary">Your claims</p>
-                      <p className="text-xs admin-text-secondary">{claims.length} total</p>
+                      <p className="text-xs admin-text-secondary">
+                        {statusFilter
+                          ? `${filteredClaims.length} of ${claims.length}`
+                          : `${claims.length} total`}
+                      </p>
                     </div>
                     <Button
                       size="sm"
@@ -308,6 +308,25 @@ export default function ClaimantPage() {
                       New claim
                     </Button>
                   </div>
+                  {claims.length > 0 && (
+                    <div className="mt-3">
+                      <label htmlFor="status-filter" className="sr-only">
+                        Filter by status
+                      </label>
+                      <select
+                        id="status-filter"
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                        className="w-full text-sm rounded-lg border border-white/20 bg-white/5 text-slate-200 px-3 py-2 focus:border-blue-cobalt focus:outline-none focus:ring-1 focus:ring-blue-cobalt"
+                      >
+                        <option value="">All statuses</option>
+                        <option value="needs_review">Needs Review</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="submitted">Submitted</option>
+                        <option value="approved">Approved</option>
+                      </select>
+                    </div>
+                  )}
                 </Card>
 
                 {loadingClaims ? (
@@ -327,38 +346,61 @@ export default function ClaimantPage() {
                       Submit a claim
                     </Button>
                   </Card>
+                ) : filteredClaims.length === 0 ? (
+                  <Card className="admin-card py-10 text-center">
+                    <p className="admin-text-secondary font-medium mb-2">No claims match this filter</p>
+                    <p className="text-sm admin-text-secondary mb-4">Try “All statuses” or another status.</p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setStatusFilter('')}
+                    >
+                      Clear filter
+                    </Button>
+                  </Card>
                 ) : (
                   <div className="space-y-2">
-                    {claims.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedClaimId(c.id);
-                          setShowNewClaim(false);
-                        }}
-                        className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 admin-card ${
-                          selectedClaimId === c.id
-                            ? 'border-blue-cobalt bg-blue-cobalt/20 shadow-lg shadow-blue-cobalt/20 scale-[1.02]'
-                            : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20 hover:scale-[1.01]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold admin-text-primary truncate">#{c.id.slice(0, 8)}</p>
-                            <p className="text-xs admin-text-secondary truncate">
-                              {c.description || 'No description'}
-                            </p>
+                    {filteredClaims.map((c) => {
+                      const isSelected = selectedClaimId === c.id;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedClaimId(c.id);
+                            setShowNewClaim(false);
+                          }}
+                          className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 admin-card relative ${
+                            isSelected
+                              ? 'border-blue-cobalt bg-blue-cobalt/20 shadow-lg shadow-blue-cobalt/20 scale-[1.02]'
+                              : 'border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20 hover:scale-[1.01]'
+                          }`}
+                        >
+                          {isSelected && (
+                            <div className="absolute inset-0 bg-gradient-to-br from-blue-cobalt/20 via-blue-cobalt/10 to-transparent pointer-events-none rounded-xl" />
+                          )}
+                          <div className="relative flex items-center justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-semibold admin-text-primary truncate">#{c.id.slice(0, 8)}</p>
+                                {isSelected && (
+                                  <div className="w-1.5 h-1.5 rounded-full bg-blue-cobalt-light animate-pulse flex-shrink-0" />
+                                )}
+                              </div>
+                              <p className="text-xs admin-text-secondary truncate mt-0.5">
+                                {c.description || 'No description'}
+                              </p>
+                            </div>
+                            <div className="flex flex-col items-end gap-1.5">
+                              <Badge status={c.status} className="shrink-0" />
+                              <span className="text-xs admin-text-secondary">
+                                ${Math.round(c.claim_amount).toLocaleString()}
+                              </span>
+                            </div>
                           </div>
-                          <div className="flex flex-col items-end">
-                            <span className="text-xs admin-text-secondary">{statusLabel(c)}</span>
-                            <span className="text-xs admin-text-secondary">
-                              ${Math.round(c.claim_amount).toLocaleString()}
-                            </span>
-                          </div>
-                        </div>
-                      </button>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -381,6 +423,7 @@ export default function ClaimantPage() {
                       }
                     }}
                     autoStartEvaluation={selectedClaim.id === autoEvaluateClaimId}
+                    claimantView={true}
                   />
                 ) : (
                   <Card className="admin-card h-full flex items-center justify-center min-h-[300px]">

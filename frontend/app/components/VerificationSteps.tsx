@@ -8,14 +8,14 @@ interface VerificationStepsProps {
 }
 
 const defaultSteps: VerificationStep[] = [
-  { type: 'document', label: 'Document', price: 0.10, completed: false },
-  { type: 'image', label: 'Image', price: 0.15, completed: false },
-  { type: 'fraud', label: 'Fraud', price: 0.10, completed: false },
+  { type: 'document', label: 'Document', price: 0, completed: false },
+  { type: 'image', label: 'Image', price: 0, completed: false },
+  { type: 'fraud', label: 'Fraud', price: 0, completed: false },
 ];
 
 export function VerificationSteps({ 
   steps = defaultSteps, 
-  totalCost = 0.35 
+  totalCost = 0 
 }: VerificationStepsProps) {
   const completedSteps = steps.filter(s => s.completed).length;
   const allCompleted = completedSteps === steps.length;
@@ -23,8 +23,8 @@ export function VerificationSteps({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium text-slate-300">Verification Steps</h4>
-        <span className="text-xs text-slate-400">
+        <h4 className="text-sm font-medium text-slate-200">Verification Steps</h4>
+        <span className="text-xs text-slate-300">
           {completedSteps}/{steps.length} complete
         </span>
       </div>
@@ -51,12 +51,9 @@ export function VerificationSteps({
                 </svg>
               )}
               
-              {/* Label & Price */}
+              {/* Label (price hidden: evaluations are free) */}
               <span className={step.completed ? 'text-emerald-400' : 'text-slate-400'}>
                 {step.label}
-              </span>
-              <span className={`text-xs ${step.completed ? 'text-emerald-400/70' : 'text-slate-500'}`}>
-                ${step.price.toFixed(2)}
               </span>
             </div>
 
@@ -70,20 +67,11 @@ export function VerificationSteps({
         ))}
       </div>
 
-      {/* Total Cost */}
-      {allCompleted && totalCost > 0 && (
-        <div className="flex items-center justify-between pt-3 border-t border-white/10">
-          <div>
-            <span className="text-sm text-slate-400">Total Processing Cost</span>
-            <p className="text-xs text-slate-500 mt-0.5">Charged for AI verification services</p>
-          </div>
-          <span className="text-sm font-semibold text-cyan-400">${totalCost.toFixed(2)} USDC</span>
-        </div>
-      )}
-      {allCompleted && totalCost === 0 && (
+      {/* Evaluations are free – no cost block shown */}
+      {allCompleted && (
         <div className="pt-3 border-t border-white/10">
-          <p className="text-xs text-slate-500 italic">
-            Processing costs will be calculated after evaluation completes.
+          <p className="text-xs text-slate-300 italic">
+            Evaluations are included at no cost.
           </p>
         </div>
       )}

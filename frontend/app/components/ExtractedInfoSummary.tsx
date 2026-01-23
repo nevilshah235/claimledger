@@ -8,112 +8,251 @@ interface ExtractedInfoSummaryProps {
   agentResults: AgentResult[];
 }
 
+// Field group labels and their sort order
+const FIELD_GROUPS: Record<string, { label: string; order: number }> = {
+  document: { label: 'Document & invoice', order: 1 },
+  vehicle: { label: 'Vehicle', order: 2 },
+  claim: { label: 'Claim & people', order: 3 },
+  workshop: { label: 'Workshop & contact', order: 4 },
+  financial: { label: 'Financial summary', order: 5 },
+  other: { label: 'Other', order: 6 },
+};
+
+// Keywords (lowercase) to assign fields to groups
+const GROUP_KEYWORDS: Record<string, string[]> = {
+  document: ['vendor', 'invoice', 'vro', 'policy_number', 'claim_number', 'document_type', 'content_type', 'structure'],
+  vehicle: ['vehicle', 'registration', 'engine', 'owner_name', 'make', 'model', 'vehicle_age'],
+  claim: ['surveyor', 'coordinator', 'accident'],
+  workshop: ['workshop', 'gst', 'toll', 'payment_to'],
+  financial: ['liability', 'deductible', 'salvage', 'towing', 'customer_liability', 'digit_liability', 'non_standard', 'standard_amount', 'amount', 'total'],
+};
+
+function getFieldGroup(key: string): string {
+  const k = key.toLowerCase();
+  for (const [group, keywords] of Object.entries(GROUP_KEYWORDS)) {
+    if (keywords.some((kw) => k.includes(kw) || k === kw)) return group;
+  }
+  return 'other';
+}
+
+function groupFields(fields: Record<string, any>): Record<string, Record<string, any>> {
+  const grouped: Record<string, Record<string, any>> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    const g = getFieldGroup(key);
+    if (!grouped[g]) grouped[g] = {};
+    grouped[g][key] = value;
+  }
+  return grouped;
+}
+
+// Sensitive field keys (PII, identifiers): excluded from UI display
+function isSensitiveField(key: string): boolean {
+  const k = key.toLowerCase();
+  const patterns = [
+    'owner_name', 'owner',
+    'policy_number', 'policy_no', 'policyno',
+    'claim_number', 'claim_no', 'claimno',
+    'engine_number', 'engine_no', 'engineno',
+    'chassis_number', 'chassis_no', 'chassino', 'chassis', 'chasis_number', 'chasis_no', 'chasis',
+    'registration_number', 'registration_no', 'reg_no', 'vehicle_registration',
+    'surveyor_name', 'surveyor',
+    'claim_coordinator', 'coordinator',
+    'workshop_gst_number', 'workshop_gst', 'gst_number', 'gst_no',
+  ];
+  return patterns.some((p) => k === p || k.includes(p));
+}
+
 // Helper function to format field names (convert snake_case to Title Case)
 function formatFieldName(key: string): string {
   return key
     .split('_')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
 }
 
-// Helper function to format field values
+// Helper function to format field values (preserve currency symbols like ₹ from the value string)
 function formatFieldValue(value: any): string {
   if (value === null || value === undefined) return 'N/A';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'number') {
-    // Check if it's a monetary value (has decimal places or is large)
-    if (value % 1 !== 0 || value > 100) {
-      return `$${value.toFixed(2)}`;
-    }
+    if (value % 1 !== 0 || value > 100) return `$${value.toFixed(2)}`;
     return value.toString();
   }
-  if (Array.isArray(value)) {
-    return value.length > 0 ? value.join(', ') : 'None';
-  }
-  if (typeof value === 'object') {
-    return JSON.stringify(value, null, 2);
-  }
+  if (Array.isArray(value)) return value.length > 0 ? value.join(', ') : 'None';
+  if (typeof value === 'object') return JSON.stringify(value, null, 2);
   return String(value);
 }
 
 // Component to render a single field
 function FieldDisplay({ label, value }: { label: string; value: any }) {
   if (value === null || value === undefined || value === '') return null;
-  
   return (
     <div className="flex items-start gap-2">
-      <span className="text-slate-400 min-w-[100px]">{label}:</span>
-      <span className="text-slate-300 break-words">{formatFieldValue(value)}</span>
+      <span className="text-slate-400 shrink-0">{label}:</span>
+      <span className="text-slate-100 break-words">{formatFieldValue(value)}</span>
     </div>
   );
 }
 
-// Component to render line items
-function LineItemsDisplay({ lineItems }: { lineItems: any[] }) {
-  const [expanded, setExpanded] = useState(false);
-  
-  if (!lineItems || lineItems.length === 0) return null;
-  
+// Section: grouped key-value fields with a two-column grid
+function FieldGroupSection({
+  title,
+  fields,
+  formatKey = formatFieldName,
+}: {
+  title: string;
+  fields: Record<string, any>;
+  formatKey?: (k: string) => string;
+}) {
+  const entries = Object.entries(fields).filter(
+    ([k, v]) => v != null && v !== '' && !isSensitiveField(k)
+  );
+  if (entries.length === 0) return null;
   return (
-    <div className="pt-2 border-t border-slate-700">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-slate-400 hover:text-slate-300 text-xs mb-2"
-      >
-        <span>{expanded ? '▼' : '▶'}</span>
-        <span>Line Items ({lineItems.length})</span>
-      </button>
-      {expanded && (
-        <div className="space-y-2 ml-4">
-          {lineItems.map((item, idx) => (
-            <div key={idx} className="p-2 rounded bg-slate-800/50 text-xs">
-              {item.item_name && <FieldDisplay label="Item" value={item.item_name} />}
-              {item.description && <FieldDisplay label="Description" value={item.description} />}
-              {item.quantity !== undefined && <FieldDisplay label="Quantity" value={item.quantity} />}
-              {item.unit_price !== undefined && <FieldDisplay label="Unit Price" value={item.unit_price} />}
-              {item.total !== undefined && <FieldDisplay label="Total" value={item.total} />}
-              {item.sku && <FieldDisplay label="SKU" value={item.sku} />}
-              {item.category && <FieldDisplay label="Category" value={item.category} />}
-            </div>
-          ))}
-        </div>
-      )}
+    <div className="pb-3 border-b border-slate-600">
+      <div className="text-xs font-semibold text-slate-200 mb-3 uppercase tracking-wide">{title}</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+        {entries.map(([key, value]) => (
+          <FieldDisplay key={key} label={formatKey(key)} value={value} />
+        ))}
+      </div>
     </div>
   );
 }
 
-// Component to render tables
+// Line items as a table (always visible, with section header)
+function LineItemsTable({ lineItems }: { lineItems: any[] }) {
+  if (!lineItems || lineItems.length === 0) return null;
+
+  const cols = new Set<string>();
+  lineItems.forEach((item) => Object.keys(item || {}).forEach((k) => cols.add(k)));
+  const prefer = ['item_name', 'description', 'quantity', 'unit_price', 'total', 'item', 'sku', 'category'];
+  const headers = prefer.filter((h) => cols.has(h));
+  Array.from(cols).filter((c) => !prefer.includes(c)).forEach((c) => headers.push(c));
+  const filteredHeaders = headers.filter((h) => !isSensitiveField(h));
+  if (filteredHeaders.length === 0) return null;
+
+  return (
+    <div className="pt-4 border-t border-slate-600">
+      <div className="text-xs font-semibold text-slate-200 mb-3 uppercase tracking-wide">
+        Line Items ({lineItems.length})
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-slate-600">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-slate-600 bg-slate-800/50">
+              {filteredHeaders.map((h) => (
+                <th key={h} className="text-left px-3 py-2 text-slate-300 font-medium">
+                  {formatFieldName(h)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {lineItems.map((item, idx) => (
+              <tr key={idx} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-800/30">
+                {filteredHeaders.map((h) => (
+                  <td key={h} className="px-3 py-2 text-slate-100">
+                    {formatFieldValue((item || {})[h])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Normalize table from extraction: headers as array, rows as array-of-arrays when possible
+function normalizeTable(table: { headers?: unknown; rows?: unknown }): { headers: string[]; rows: (string | number)[][] } {
+  let headers: string[] = [];
+  if (Array.isArray(table.headers)) {
+    headers = table.headers.map((h) => (h != null ? String(h).trim() : '')).filter(Boolean);
+  } else if (typeof table.headers === 'string') {
+    headers = table.headers.split(/[,;|]/).map((h) => h.trim()).filter(Boolean);
+  }
+
+  let rows: (string | number)[][] = [];
+  if (Array.isArray(table.rows)) {
+    rows = table.rows.map((row) => {
+      if (Array.isArray(row)) {
+        return row.map((c) => (c != null ? String(c) : ''));
+      }
+      if (row && typeof row === 'object' && !Array.isArray(row)) {
+        return headers.map((h) => String((row as Record<string, unknown>)[h] ?? ''));
+      }
+      return [String(row)];
+    });
+  }
+  return { headers, rows };
+}
+
+// Component to render tables (headers + full data grid when rows are available)
 function TablesDisplay({ tables }: { tables: any[] }) {
   const [expanded, setExpanded] = useState(false);
-  
+
   if (!tables || tables.length === 0) return null;
-  
+
   return (
-    <div className="pt-2 border-t border-slate-700">
+    <div className="pt-2 border-t border-slate-600">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-slate-400 hover:text-slate-300 text-xs mb-2"
+        className="flex items-center gap-2 text-slate-300 hover:text-slate-100 text-xs mb-2"
       >
         <span>{expanded ? '▼' : '▶'}</span>
         <span>Tables ({tables.length})</span>
       </button>
       {expanded && (
         <div className="space-y-3 ml-4">
-          {tables.map((table, idx) => (
-            <div key={idx} className="p-2 rounded bg-slate-800/50 text-xs">
-              {table.summary && <FieldDisplay label="Summary" value={table.summary} />}
-              {table.headers && Array.isArray(table.headers) && table.headers.length > 0 && (
-                <div className="mt-2">
-                  <div className="text-slate-400 mb-1">Headers: {table.headers.join(', ')}</div>
-                  {table.rows && Array.isArray(table.rows) && table.rows.length > 0 && (
-                    <div className="text-slate-300">
-                      {table.rows.length} row(s)
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+          {tables.map((table, idx) => {
+            const { headers, rows } = normalizeTable(table);
+            const keptIndices = headers.map((h, i) => (isSensitiveField(h) ? -1 : i)).filter((i) => i >= 0);
+            const safeHeaders = keptIndices.map((i) => headers[i]);
+            const canShowGrid = safeHeaders.length > 0 && rows.length > 0;
+
+            return (
+              <div key={idx} className="p-2 rounded bg-slate-800/50 text-xs">
+                {table.summary && <FieldDisplay label="Summary" value={table.summary} />}
+                {safeHeaders.length > 0 && (
+                  <div className="mt-2">
+                    {canShowGrid ? (
+                      <div className="overflow-x-auto rounded-lg border border-slate-600">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-600 bg-slate-800/50">
+                              {safeHeaders.map((h) => (
+                                <th key={h} className="text-left px-2 py-1.5 text-slate-300 font-medium">
+                                  {formatFieldName(h)}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map((row, rIdx) => (
+                              <tr key={rIdx} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-800/30">
+                                {keptIndices.map((colIdx, cIdx) => (
+                                  <td key={cIdx} className="px-2 py-1.5 text-slate-100">
+                                    {formatFieldValue(Array.isArray(row) ? row[colIdx] : '')}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="text-slate-300 mb-1">Headers: {safeHeaders.join(', ')}</div>
+                        {rows.length > 0 && <div className="text-slate-200">{rows.length} row(s)</div>}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -121,23 +260,26 @@ function TablesDisplay({ tables }: { tables: any[] }) {
 }
 
 export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps) {
-  // Extract data from different agent types
-  const documentResult = agentResults.find(r => r.agent_type === 'document');
-  const imageResult = agentResults.find(r => r.agent_type === 'image');
-  const fraudResult = agentResults.find(r => r.agent_type === 'fraud');
+  // Resolve from agent_type: support both canonical (document) and tool (verify_document) names
+  const documentResult = agentResults.find(r => r.agent_type === 'document' || r.agent_type === 'verify_document');
+  const imageResult = agentResults.find(r => r.agent_type === 'image' || r.agent_type === 'verify_image');
+  const fraudResult = agentResults.find(r => r.agent_type === 'fraud' || r.agent_type === 'verify_fraud');
+  const crossCheckResult = agentResults.find(r => r.agent_type === 'cross_check_amounts');
+  const validateResult = agentResults.find(r => r.agent_type === 'validate_claim_data');
+  const estimateResult = agentResults.find(r => r.agent_type === 'estimate_repair_cost');
 
-  const hasData = documentResult || imageResult || fraudResult;
+  const hasData = documentResult || imageResult || fraudResult || crossCheckResult || validateResult || estimateResult;
 
   if (!hasData) {
     return null;
   }
 
   return (
-    <Card className="p-6">
-      <h3 className="text-sm font-medium text-white mb-4">Extracted Information Summary</h3>
+    <Card className="p-6 admin-card">
+      <h3 className="text-sm font-medium text-slate-100 mb-4">Extracted Information Summary</h3>
       <div className="space-y-4">
-        {/* From Documents */}
-        {documentResult?.result.extracted_data && (() => {
+        {/* From Documents: when extracted_data is present */}
+        {documentResult?.result?.extracted_data && (() => {
           const extractedData = documentResult.result.extracted_data;
           
           // Check if extraction failed
@@ -216,9 +358,9 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
               
               {/* Document Classification */}
               {classification && (
-                <div className="mb-3 pb-3 border-b border-slate-700">
-                  <div className="text-xs font-medium text-slate-300 mb-2">Document Classification</div>
-                  <div className="space-y-1 text-xs">
+                <div className="pb-3 border-b border-slate-600">
+                  <div className="text-xs font-semibold text-slate-200 mb-2 uppercase tracking-wide">Document Classification</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                     {classification.category && classification.category !== 'unknown' && (
                       <FieldDisplay label="Category" value={classification.category} />
                     )}
@@ -228,47 +370,60 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
                     {classification.primary_content_type && classification.primary_content_type !== 'unknown' && (
                       <FieldDisplay label="Content Type" value={classification.primary_content_type} />
                     )}
-                    {classification.has_tables !== undefined && (
-                      <FieldDisplay label="Has Tables" value={classification.has_tables} />
-                    )}
-                    {classification.has_line_items !== undefined && (
-                      <FieldDisplay label="Has Line Items" value={classification.has_line_items} />
-                    )}
                   </div>
                 </div>
               )}
               
-              {/* Extracted Fields */}
-              <div className="space-y-2 text-xs">
-                {Object.entries(fieldsToDisplay).map(([key, value]) => (
-                  <FieldDisplay key={key} label={formatFieldName(key)} value={value} />
-                ))}
-              </div>
-              
-              {/* Line Items */}
+              {/* Extracted Fields – grouped */}
+              {(() => {
+                const grouped = groupFields(fieldsToDisplay);
+                const order = Object.keys(FIELD_GROUPS).sort(
+                  (a, b) => (FIELD_GROUPS[a]?.order ?? 99) - (FIELD_GROUPS[b]?.order ?? 99)
+                );
+                return (
+                  <div className="space-y-3 pt-4">
+                    {order.map((g) => {
+                      const info = FIELD_GROUPS[g];
+                      const fields = grouped[g];
+                      if (!fields || Object.keys(fields).length === 0) return null;
+                      return (
+                        <FieldGroupSection
+                          key={g}
+                          title={info?.label ?? g}
+                          fields={fields}
+                        />
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
+              {/* Line Items – tabular */}
               {lineItems && Array.isArray(lineItems) && lineItems.length > 0 && (
-                <LineItemsDisplay lineItems={lineItems} />
+                <LineItemsTable lineItems={lineItems} />
               )}
-              
+
               {/* Tables */}
               {tables && Array.isArray(tables) && tables.length > 0 && (
                 <TablesDisplay tables={tables} />
               )}
-              
+
               {/* Metadata */}
               {metadata && (
-                <div className="pt-2 mt-2 border-t border-slate-700 text-xs">
-                  <div className="text-slate-400 mb-1">Metadata</div>
-                  {metadata.confidence !== undefined && metadata.confidence > 0 && (
-                    <FieldDisplay label="Confidence" value={`${(metadata.confidence * 100).toFixed(1)}%`} />
-                  )}
-                  {metadata.extraction_method && metadata.extraction_method !== 'failed' && (
-                    <FieldDisplay label="Extraction Method" value={metadata.extraction_method} />
-                  )}
+                <div className="pt-3 mt-1 border-t border-slate-600">
+                  <div className="text-xs font-semibold text-slate-200 mb-2 uppercase tracking-wide">Metadata</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                    {metadata.confidence !== undefined && metadata.confidence > 0 && (
+                      <FieldDisplay label="Confidence" value={`${(metadata.confidence * 100).toFixed(1)}%`} />
+                    )}
+                    {metadata.extraction_method && metadata.extraction_method !== 'failed' && (
+                      <FieldDisplay label="Extraction method" value={metadata.extraction_method} />
+                    )}
+                  </div>
                   {metadata.notes && (
-                    <div className="mt-1">
+                    <div className="mt-2 text-xs">
                       <span className="text-slate-400">Notes: </span>
-                      <span className="text-slate-300">{metadata.notes}</span>
+                      <span className="text-slate-200">{metadata.notes}</span>
                     </div>
                   )}
                 </div>
@@ -276,6 +431,22 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
             </div>
           );
         })()}
+
+        {/* From Documents: fallback when we have a document result but no extracted_data */}
+        {documentResult && !documentResult.result?.extracted_data && (
+          <div className="p-4 rounded-lg bg-slate-500/10 border border-slate-500/30">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-lg">📄</span>
+              <h4 className="text-sm font-medium text-white">From Documents</h4>
+            </div>
+            <p className="text-xs text-slate-300">
+              Document was processed. No structured extraction data is available.
+              {documentResult.result?.error && (
+                <span className="block mt-1 text-amber-400">Error: {String(documentResult.result.error)}</span>
+              )}
+            </p>
+          </div>
+        )}
 
         {/* From Images */}
         {imageResult?.result.damage_assessment && (
@@ -287,16 +458,16 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
             <div className="space-y-2 text-xs">
               {imageResult.result.damage_assessment.damage_type && (
                 <div className="flex items-center gap-2">
-                  <span className="text-slate-400">Damage Type:</span>
-                  <span className="text-slate-300">
+                  <span className="text-slate-300">Damage Type:</span>
+                  <span className="text-slate-100">
                     {imageResult.result.damage_assessment.damage_type}
                   </span>
                 </div>
               )}
               {imageResult.result.damage_assessment.severity && (
                 <div className="flex items-center gap-2">
-                  <span className="text-slate-400">Severity:</span>
-                  <span className="text-slate-300">
+                  <span className="text-slate-300">Severity:</span>
+                  <span className="text-slate-100">
                     {imageResult.result.damage_assessment.severity}
                   </span>
                 </div>
@@ -304,17 +475,9 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
               {imageResult.result.damage_assessment.affected_parts && 
                Array.isArray(imageResult.result.damage_assessment.affected_parts) && (
                 <div className="flex items-start gap-2">
-                  <span className="text-slate-400">Affected Parts:</span>
-                  <span className="text-slate-300">
+                  <span className="text-slate-300">Affected Parts:</span>
+                  <span className="text-slate-100">
                     {imageResult.result.damage_assessment.affected_parts.join(', ')}
-                  </span>
-                </div>
-              )}
-              {imageResult.result.damage_assessment.estimated_cost !== undefined && (
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-400">Estimated Cost:</span>
-                  <span className="text-purple-400 font-medium">
-                    ${Number(imageResult.result.damage_assessment.estimated_cost).toFixed(2)}
                   </span>
                 </div>
               )}
@@ -323,7 +486,7 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
         )}
 
         {/* From Bills/Receipts */}
-        {fraudResult?.result.bill_analysis && (
+        {fraudResult?.result?.bill_analysis && (
           <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/30">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-lg">🛡️</span>
@@ -331,8 +494,8 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
             </div>
             <div className="space-y-2 text-xs">
               <div className="flex items-center gap-2">
-                <span className="text-slate-400">Total Bill Amount:</span>
-                <span className="text-slate-300 font-medium">
+                <span className="text-slate-300">Total Bill Amount:</span>
+                <span className="text-slate-100 font-medium">
                   ${fraudResult.result.bill_analysis.extracted_total.toFixed(2)}
                 </span>
               </div>
@@ -340,7 +503,7 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
                Math.abs(fraudResult.result.bill_analysis.recommended_amount - 
                         fraudResult.result.bill_analysis.extracted_total) > 0.01 && (
                 <div className="flex items-center gap-2">
-                  <span className="text-slate-400">Recommended Amount:</span>
+                  <span className="text-slate-300">Recommended Amount:</span>
                   <span className="text-yellow-400 font-medium">
                     ${fraudResult.result.bill_analysis.recommended_amount.toFixed(2)}
                   </span>
@@ -353,7 +516,7 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
                   ) : (
                     <span className="text-red-400">✗</span>
                   )}
-                  <span className="text-slate-400">Claim Amount Match</span>
+                  <span className="text-slate-300">Claim Amount Match</span>
                 </div>
                 <div className="flex items-center gap-1">
                   {fraudResult.result.bill_analysis.document_amount_match ? (
@@ -361,12 +524,12 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
                   ) : (
                     <span className="text-red-400">✗</span>
                   )}
-                  <span className="text-slate-400">Document Amount Match</span>
+                  <span className="text-slate-300">Document Amount Match</span>
                 </div>
               </div>
               {fraudResult.result.bill_analysis.validation_summary && (
-                <div className="pt-2 border-t border-slate-700">
-                  <p className="text-slate-400 mb-1">Validation:</p>
+                <div className="pt-2 border-t border-slate-600">
+                  <p className="text-slate-300 mb-1">Validation:</p>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <span className="text-green-400">
@@ -388,6 +551,103 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
                         {fraudResult.result.bill_analysis.validation_summary.irrelevant_items_count} irrelevant
                       </span>
                     </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* From claim analysis: cross_check_amounts, validate_claim_data, estimate_repair_cost */}
+        {(crossCheckResult || validateResult || estimateResult) && (
+          <div className="p-4 rounded-lg bg-cyan-500/10 border border-cyan-500/30">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-lg">📊</span>
+              <h4 className="text-sm font-medium text-white">From Claim Analysis</h4>
+            </div>
+            <div className="space-y-4 text-xs">
+              {estimateResult?.result && typeof estimateResult.result === 'object' && (
+                <div className="pb-3 border-b border-slate-600">
+                  <div className="text-xs font-semibold text-slate-200 mb-2 uppercase tracking-wide">Cost estimate</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+                    {'estimated_cost' in estimateResult.result && (
+                      <FieldDisplay label="Estimated cost" value={`$${Number((estimateResult.result as Record<string, unknown>).estimated_cost).toFixed(2)}`} />
+                    )}
+                    {'confidence' in estimateResult.result && (
+                      <FieldDisplay label="Confidence" value={`${(Number((estimateResult.result as Record<string, unknown>).confidence) * 100).toFixed(0)}%`} />
+                    )}
+                    {typeof (estimateResult.result as Record<string, unknown>).cost_breakdown === 'object' &&
+                     (estimateResult.result as Record<string, unknown>).cost_breakdown != null ? (
+                      <div className="sm:col-span-2">
+                        <span className="text-slate-400">Breakdown: </span>
+                        <span className="text-slate-100">
+                          {JSON.stringify((estimateResult.result as Record<string, unknown>).cost_breakdown)}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+              {crossCheckResult?.result && typeof crossCheckResult.result === 'object' && (
+                <div className="pb-3 border-b border-slate-600">
+                  <div className="text-xs font-semibold text-slate-200 mb-2 uppercase tracking-wide">Amount cross-check</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+                    {'matches' in crossCheckResult.result && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400">Matches:</span>
+                        {(crossCheckResult.result as Record<string, unknown>).matches ? (
+                          <span className="text-green-400">✓ Yes</span>
+                        ) : (
+                          <span className="text-amber-400">✗ No</span>
+                        )}
+                      </div>
+                    )}
+                    {'difference_percent' in crossCheckResult.result && Number((crossCheckResult.result as Record<string, unknown>).difference_percent) > 0 && (
+                      <FieldDisplay label="Difference" value={`${Number((crossCheckResult.result as Record<string, unknown>).difference_percent).toFixed(1)}%`} />
+                    )}
+                    {Array.isArray((crossCheckResult.result as Record<string, unknown>).warnings) && ((crossCheckResult.result as Record<string, unknown>).warnings as string[]).length > 0 && (
+                      <div className="sm:col-span-2">
+                        <span className="text-slate-400">Warnings: </span>
+                        <ul className="mt-1 list-disc list-inside text-slate-200">
+                          {((crossCheckResult.result as Record<string, unknown>).warnings as string[]).map((w, i) => (
+                            <li key={i}>{w}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {validateResult?.result && typeof validateResult.result === 'object' && (
+                <div>
+                  <div className="text-xs font-semibold text-slate-200 mb-2 uppercase tracking-wide">Validation</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+                    {'recommendation' in validateResult.result && (
+                      <FieldDisplay label="Recommendation" value={String((validateResult.result as Record<string, unknown>).recommendation)} />
+                    )}
+                    {'validation_score' in validateResult.result && (
+                      <FieldDisplay label="Score" value={`${(Number((validateResult.result as Record<string, unknown>).validation_score) * 100).toFixed(0)}%`} />
+                    )}
+                    {'valid' in validateResult.result && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400">Valid:</span>
+                        {(validateResult.result as Record<string, unknown>).valid ? (
+                          <span className="text-green-400">Yes</span>
+                        ) : (
+                          <span className="text-amber-400">No</span>
+                        )}
+                      </div>
+                    )}
+                    {Array.isArray((validateResult.result as Record<string, unknown>).issues) && ((validateResult.result as Record<string, unknown>).issues as string[]).length > 0 && (
+                      <div className="sm:col-span-2">
+                        <span className="text-slate-400">Issues: </span>
+                        <ul className="mt-1 list-disc list-inside text-slate-200">
+                          {((validateResult.result as Record<string, unknown>).issues as string[]).map((issue, i) => (
+                            <li key={i}>{issue}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

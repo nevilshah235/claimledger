@@ -23,10 +23,13 @@ export function EnableSettlementsModal({
   isOpen,
   onClose,
   required = false,
+  role = 'claimant',
 }: {
   isOpen: boolean;
   onClose: () => void;
   required?: boolean;
+  /** 'insurer' shows copy about funding settlements; 'claimant' shows copy about receiving payouts. */
+  role?: 'claimant' | 'insurer';
 }) {
   const { user, token, loading, refresh } = useAuth();
   const [step, setStep] = useState<'intro' | 'connecting'>('intro');
@@ -378,7 +381,15 @@ export function EnableSettlementsModal({
             Enable On-Chain Payments
           </h2>
           <p className="text-sm admin-text-secondary leading-relaxed">
-            Enable now to receive on-chain payouts when claims are approved.
+            {role === 'insurer' ? (
+              <>
+                Enable to <strong className="text-white">fund claim settlements</strong> (and pay evaluation fees). When you settle, USDC is sent from <strong className="text-white">your wallet</strong> to the claimant through a <strong className="text-white">secure escrow contract</strong> on Arc.
+              </>
+            ) : (
+              <>
+                Enable now to <strong className="text-white">receive on-chain payouts</strong> when claims are approved.
+              </>
+            )}
           </p>
         </div>
 

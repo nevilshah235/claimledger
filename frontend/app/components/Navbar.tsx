@@ -101,7 +101,7 @@ export function Navbar({ walletAddress, role, onConnect, onDisconnect, onOpenLog
                     onClick={() => onOpenLoginModal?.('claimant')}
                     className="font-quando"
                   >
-                    File a claim
+                    File Claim
                   </Button>
                   <Button 
                     variant="secondary" 

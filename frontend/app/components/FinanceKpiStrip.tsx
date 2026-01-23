@@ -45,27 +45,27 @@ export function FinanceKpiStrip() {
   const kpis: Kpi[] = useMemo(
     () => [
       {
-        label: 'Cost per evaluation',
-        value: 0.35,
-        format: (v) => `$${v.toFixed(2)}`,
-        deltaLabel: '−8% vs baseline',
+        label: 'AI evaluations',
+        value: 0,
+        format: () => 'Free',
+        deltaLabel: 'Included in platform',
       },
       {
         label: 'Avg time to decision',
         value: 28,
-        format: (v) => `${Math.round(v)}s`,
+        format: (v: number) => `${Math.round(v)}s`,
         deltaLabel: '−12% this week',
       },
       {
         label: 'Settlement finality',
         value: 2.0,
-        format: (v) => `${v.toFixed(1)}s`,
+        format: (v: number) => `${v.toFixed(1)}s`,
         deltaLabel: 'p95 on testnet',
       },
       {
         label: 'Approval rate',
         value: 0.92,
-        format: (v) => `${Math.round(v * 100)}%`,
+        format: (v: number) => `${Math.round(v * 100)}%`,
         deltaLabel: '+3% QoQ',
       },
     ],

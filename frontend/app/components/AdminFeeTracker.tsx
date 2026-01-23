@@ -11,6 +11,14 @@ interface FeeBreakdown {
   timestamp: string;
 }
 
+interface GasBreakdown {
+  claim_id: string;
+  tx_hash: string;
+  gas_used: number;
+  cost_arc: number;
+  timestamp: string;
+}
+
 interface FeeTrackingData {
   wallet_address: string | null;
   current_balance: {
@@ -23,14 +31,16 @@ interface FeeTrackingData {
       };
     }>;
     wallet_id?: string;
-  } | null;
+  } | null | number; // Allow number for backward compatibility, but expect the balance structure
   total_spent: number;
   total_evaluations: number;
   average_cost_per_evaluation: number;
   fee_breakdown: FeeBreakdown[];
+  total_gas_arc: number;
+  gas_breakdown: GasBreakdown[];
 }
 
-export function AdminFeeTracker() {
+export function AdminFeeTracker({ refreshTrigger }: { refreshTrigger?: number }) {
   const [feeData, setFeeData] = useState<FeeTrackingData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +50,9 @@ export function AdminFeeTracker() {
       setLoading(true);
       setError(null);
       const data = await api.admin.getFees();
-      setFeeData(data);
+      // Type assertion: API returns current_balance as Dict[str, Any] from backend,
+      // but TypeScript may infer it differently. Cast to expected type.
+      setFeeData(data as FeeTrackingData);
       
       // Log balance information for debugging
       if (data.current_balance === null) {
@@ -69,10 +81,20 @@ export function AdminFeeTracker() {
     return () => clearInterval(interval);
   }, []);
 
+  // When parent increments refreshTrigger (e.g. after a settlement), refetch to show updated balance
+  useEffect(() => {
+    if (refreshTrigger != null && refreshTrigger > 0) loadFeeData();
+  }, [refreshTrigger]);
+
   // Extract USDC balance from balance structure (same logic as WalletInfoModal)
   // WalletInfoModal uses parseFloat(tb.amount) directly without decimal conversion
   const extractUSDCBalance = (balance: FeeTrackingData['current_balance']): number | null => {
-    if (!balance || !balance.balances || balance.balances.length === 0) {
+    // Handle case where balance might be a number (legacy format) or null
+    if (balance === null || typeof balance === 'number') {
+      return typeof balance === 'number' ? balance : null;
+    }
+    
+    if (!balance.balances || balance.balances.length === 0) {
       return null;
     }
     
@@ -150,8 +172,11 @@ export function AdminFeeTracker() {
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-xl font-bold admin-text-primary mb-1">AI Evaluation Fees</h2>
-            <p className="text-sm admin-text-secondary">Track spending on claim evaluations</p>
+            <div className="flex items-center gap-2 mb-1">
+              <h2 className="text-xl font-bold admin-text-primary">Manual Payments & Usage</h2>
+              <span className="px-2 py-0.5 text-xs font-medium rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">User-Controlled</span>
+            </div>
+            <p className="text-sm admin-text-secondary">Track usage and wallet balance for manual settlements.</p>
           </div>
           <button
             onClick={loadFeeData}
@@ -162,54 +187,68 @@ export function AdminFeeTracker() {
         </div>
 
         {/* Summary Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 gap-4 mb-6">
           <div className="bg-white/5 rounded-lg p-4 border border-white/10">
             <div className="text-xs admin-text-secondary mb-1">Wallet Balance</div>
+            <div className="text-xs font-medium text-cyan-400/90 mb-0.5">Your wallet (manual settlement)</div>
             <div className="text-lg font-bold admin-text-primary">
               {formatCurrency(extractUSDCBalance(feeData.current_balance))}
             </div>
-            {feeData.wallet_address ? (
-              <div className="text-xs admin-text-secondary mt-1 truncate">
-                {feeData.wallet_address.slice(0, 10)}...
-              </div>
-            ) : (
-              <div className="text-xs text-amber-400/70 mt-1">
-                Wallet not configured
-              </div>
-            )}
-            {(!feeData.current_balance || extractUSDCBalance(feeData.current_balance) === null) && (
-              <div className="text-xs text-amber-400/70 mt-1">
-                Balance unavailable
-              </div>
-            )}
           </div>
 
           <div className="bg-white/5 rounded-lg p-4 border border-white/10">
-            <div className="text-xs admin-text-secondary mb-1">Total Spent</div>
-            <div className="text-lg font-bold text-amber-400">
-              {formatCurrency(feeData.total_spent)}
+            <div className="text-xs admin-text-secondary mb-1">Settlement Gas</div>
+            <div className="text-lg font-bold text-cyan-400">
+              {(() => {
+                const v = feeData.total_gas_arc ?? 0;
+                return (v >= 0.0001 ? v.toFixed(6) : v.toExponential(2)) + ' ARC';
+              })()}
             </div>
             <div className="text-xs admin-text-secondary mt-1">
-              {feeData.total_evaluations} evaluation{feeData.total_evaluations !== 1 ? 's' : ''}
+              {(feeData.gas_breakdown ?? []).length} settlement{(feeData.gas_breakdown ?? []).length !== 1 ? 's' : ''}
             </div>
-          </div>
-
-          <div className="bg-white/5 rounded-lg p-4 border border-white/10">
-            <div className="text-xs admin-text-secondary mb-1">Avg. per Evaluation</div>
-            <div className="text-lg font-bold admin-text-primary">
-              {formatCurrency(feeData.average_cost_per_evaluation)}
-            </div>
-            <div className="text-xs admin-text-secondary mt-1">Per claim</div>
-          </div>
-
-          <div className="bg-white/5 rounded-lg p-4 border border-white/10">
-            <div className="text-xs admin-text-secondary mb-1">Total Evaluations</div>
-            <div className="text-lg font-bold admin-text-primary">
-              {feeData.total_evaluations}
-            </div>
-            <div className="text-xs admin-text-secondary mt-1">Claims processed</div>
           </div>
         </div>
+
+        {/* Settlement Gas per TX */}
+        {(feeData.gas_breakdown ?? []).length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-sm font-semibold admin-text-primary mb-3">Settlement Gas by Transaction</h3>
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {(feeData.gas_breakdown ?? []).map((g) => (
+                <div
+                  key={g.tx_hash}
+                  className="bg-white/5 rounded-lg p-3 border border-white/10"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-mono admin-text-secondary">
+                      #{g.claim_id.slice(0, 8)}
+                    </span>
+                    <span className="text-xs admin-text-secondary">
+                      {formatDate(g.timestamp)}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="admin-text-secondary">
+                      gas: {g.gas_used.toLocaleString()}
+                    </span>
+                    <span className="text-cyan-400">
+                      {g.cost_arc >= 0.0001 ? g.cost_arc.toFixed(6) : g.cost_arc.toExponential(2)} ARC
+                    </span>
+                    <a
+                      href={`https://testnet.arcscan.app/tx/${g.tx_hash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300"
+                    >
+                      View tx
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Recent Fee Breakdown */}
         {feeData.fee_breakdown.length > 0 && (
@@ -250,14 +289,6 @@ export function AdminFeeTracker() {
           </div>
         )}
 
-        {feeData.fee_breakdown.length === 0 && (
-          <div className="text-center py-8">
-            <p className="text-sm admin-text-secondary">No evaluation fees yet</p>
-            <p className="text-xs admin-text-secondary mt-1">
-              Fees will appear here after claim evaluations
-            </p>
-          </div>
-        )}
       </div>
     </Card>
   );

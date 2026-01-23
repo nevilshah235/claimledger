@@ -57,16 +57,15 @@ describe('ClaimStatus', () => {
     expect(screen.getByText(/0xabcdef/i)).toBeInTheDocument();
   });
 
-  it('should display processing costs', () => {
+  it('should not display processing costs (evaluations are free)', () => {
     const claimWithCosts = {
       ...mockClaim,
-      processing_costs: 0.35,
+      processing_costs: 0,
     };
 
     render(<ClaimStatus claim={claimWithCosts} />);
 
-    // Use getAllByText since "$0.35" appears multiple times (processing cost and button text)
-    const costTexts = screen.getAllByText(/\$0.35/i);
-    expect(costTexts.length).toBeGreaterThan(0);
+    // No per-evaluation cost is shown; evaluations are free
+    expect(screen.queryByText(/\$0\.35/i)).not.toBeInTheDocument();
   });
 });

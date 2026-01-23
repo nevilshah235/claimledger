@@ -29,9 +29,22 @@ export interface Claim {
   approved_amount: number | null;
   processing_costs: number | null;
   tx_hash: string | null;
+  auto_settled?: boolean | null;
   created_at: string;
   requested_data?: string[] | null;
   human_review_required?: boolean;
+  decision_overridden?: boolean;
+  review_reasons?: string[] | null;
+  contradictions?: string[] | null;
+}
+
+export interface AutoSettleWalletResponse {
+  configured: boolean;
+  address?: string | null;
+  usdc_balance?: number | null;
+  eurc_balance?: number | null;
+  gas_balance_arc?: number | null;
+  message?: string | null;
 }
 
 export interface ClaimCreateResponse {
@@ -46,8 +59,21 @@ export interface ToolCall {
   timestamp: string | null;
 }
 
+/** agent_type: document/image/fraud (canonical or verify_* tool names), reasoning, or Phase 2 tools */
+export type AgentType =
+  | 'document'
+  | 'image'
+  | 'fraud'
+  | 'reasoning'
+  | 'verify_document'
+  | 'verify_image'
+  | 'verify_fraud'
+  | 'cross_check_amounts'
+  | 'validate_claim_data'
+  | 'estimate_repair_cost';
+
 export interface AgentResult {
-  agent_type: 'document' | 'image' | 'fraud' | 'reasoning';
+  agent_type: AgentType;
   result: Record<string, any>;
   confidence: number | null;
   created_at: string;
@@ -93,6 +119,7 @@ export interface EvaluationResult {
   auto_settled?: boolean;
   tx_hash?: string | null;
   review_reasons?: string[] | null;
+  contradictions?: string[] | null;
   requested_data?: string[] | null;
   human_review_required?: boolean;
   agent_results?: Record<string, any>;
