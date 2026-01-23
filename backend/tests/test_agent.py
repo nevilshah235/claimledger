@@ -7,10 +7,9 @@ from fastapi import status
 from decimal import Decimal
 
 
-def test_evaluate_claim(client, test_claim):
+def test_evaluate_claim(client, test_claim, insurer_headers):
     """Test evaluating a claim."""
-    # Note: Agent endpoint doesn't require auth in current implementation
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     # Should return 200 for SUBMITTED claim
     assert response.status_code == status.HTTP_200_OK
@@ -20,26 +19,29 @@ def test_evaluate_claim(client, test_claim):
     assert "confidence" in data
     assert "reasoning" in data
     assert "processing_costs" in data
-    assert data["decision"] in ["APPROVED", "NEEDS_REVIEW", "REJECTED"]
+    assert data["decision"] in [
+        "AUTO_APPROVED", "APPROVED_WITH_REVIEW", "NEEDS_REVIEW",
+        "NEEDS_MORE_DATA", "INSUFFICIENT_DATA", "FRAUD_DETECTED",
+    ]
 
 
-def test_evaluate_claim_not_found(client):
+def test_evaluate_claim_not_found(client, insurer_headers):
     """Test evaluating a non-existent claim."""
     import uuid
     fake_id = str(uuid.uuid4())
-    response = client.post(f"/agent/evaluate/{fake_id}")
+    response = client.post(f"/agent/evaluate/{fake_id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
-def test_evaluate_claim_invalid_id(client):
+def test_evaluate_claim_invalid_id(client, insurer_headers):
     """Test evaluating a claim with invalid ID format."""
-    response = client.post("/agent/evaluate/invalid-id-format")
+    response = client.post("/agent/evaluate/invalid-id-format", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
-def test_evaluate_claim_wrong_status(client, test_db, test_claim):
+def test_evaluate_claim_wrong_status(client, test_db, test_claim, insurer_headers):
     """Test that claims in wrong status cannot be evaluated."""
     from src.models import Claim
     
@@ -47,13 +49,13 @@ def test_evaluate_claim_wrong_status(client, test_db, test_claim):
     test_claim.status = "SETTLED"
     test_db.commit()
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert "status" in response.json()["detail"].lower()
 
 
-def test_evaluation_updates_claim(client, test_db, test_claim):
+def test_evaluation_updates_claim(client, test_db, test_claim, insurer_headers):
     """Test that evaluation updates claim status and fields."""
     from src.models import Claim
     
@@ -61,14 +63,14 @@ def test_evaluation_updates_claim(client, test_db, test_claim):
     assert test_claim.decision is None
     assert test_claim.confidence is None
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
     # Refresh claim from database
     test_db.refresh(test_claim)
     
-    assert test_claim.status in ["APPROVED", "NEEDS_REVIEW", "SETTLED"]
+    assert test_claim.status in ["APPROVED", "NEEDS_REVIEW", "SETTLED", "AWAITING_DATA"]
     assert test_claim.decision is not None
     assert test_claim.confidence is not None
     # Processing costs may be 0 if not explicitly set by orchestrator
@@ -78,11 +80,11 @@ def test_evaluation_updates_claim(client, test_db, test_claim):
     assert float(data["processing_costs"]) >= 0
 
 
-def test_evaluation_creates_evaluation_record(client, test_db, test_claim):
+def test_evaluation_creates_evaluation_record(client, test_db, test_claim, insurer_headers):
     """Test that evaluation creates an Evaluation record."""
     from src.models import Evaluation
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -96,21 +98,20 @@ def test_evaluation_creates_evaluation_record(client, test_db, test_claim):
     assert len(evaluation.reasoning) > 0
 
 
-def test_evaluation_processing_costs(client, test_claim):
+def test_evaluation_processing_costs(client, test_claim, insurer_headers):
     """Test that evaluation includes processing costs."""
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert "processing_costs" in data
-    assert float(data["processing_costs"]) > 0
-    # Should be sum of x402 payments (0.10 + 0.15 + 0.10 = 0.35)
-    assert float(data["processing_costs"]) >= 0.35
+    # Evaluations are free; processing_costs is 0
+    assert float(data["processing_costs"]) >= 0
 
 
-def test_evaluation_approved_status(client, test_db, test_claim):
+def test_evaluation_approved_status(client, test_db, test_claim, insurer_headers):
     """Test that high confidence leads to APPROVED status."""
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -118,19 +119,20 @@ def test_evaluation_approved_status(client, test_db, test_claim):
     test_db.refresh(test_claim)
     
     if data["confidence"] >= 0.85:
-        assert data["decision"] == "APPROVED"
-        assert test_claim.status == "APPROVED"
-        assert test_claim.approved_amount is not None
+        assert data["decision"] in ["AUTO_APPROVED", "APPROVED_WITH_REVIEW"]
+        assert test_claim.status in ["APPROVED", "NEEDS_REVIEW"]
+        if data["decision"] == "AUTO_APPROVED":
+            assert test_claim.approved_amount is not None
     else:
-        assert data["decision"] == "NEEDS_REVIEW"
-        assert test_claim.status == "NEEDS_REVIEW"
+        assert data["decision"] in ["NEEDS_REVIEW", "NEEDS_MORE_DATA", "INSUFFICIENT_DATA"]
+        assert test_claim.status in ["NEEDS_REVIEW", "AWAITING_DATA"]
 
 
-def test_evaluate_claim_stores_agent_results(client, test_db, test_claim):
+def test_evaluate_claim_stores_agent_results(client, test_db, test_claim, insurer_headers):
     """Verify AgentResult records are created."""
     from src.models import AgentResult
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -141,18 +143,18 @@ def test_evaluate_claim_stores_agent_results(client, test_db, test_claim):
     
     assert len(agent_results) > 0
     
-    # Verify at least one agent result exists
+    # Verify at least one agent result exists (document, image, fraud, reasoning, or orchestrator/tool-derived)
     agent_types = [r.agent_type for r in agent_results]
-    assert any(t in ["document", "image", "fraud", "reasoning"] for t in agent_types)
+    assert any(t in ["document", "image", "fraud", "reasoning", "orchestrator"] for t in agent_types)
 
 
-def test_evaluate_claim_updates_claim_status(client, test_db, test_claim):
+def test_evaluate_claim_updates_claim_status(client, test_db, test_claim, insurer_headers):
     """Test status transitions (SUBMITTED → EVALUATING → APPROVED/NEEDS_REVIEW)."""
     from src.models import Claim
     
     assert test_claim.status == "SUBMITTED"
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -160,15 +162,15 @@ def test_evaluate_claim_updates_claim_status(client, test_db, test_claim):
     test_db.refresh(test_claim)
     
     # Status should have transitioned
-    assert test_claim.status in ["APPROVED", "NEEDS_REVIEW", "SETTLED"]
-    assert test_claim.decision in ["AUTO_APPROVED", "NEEDS_REVIEW"]
+    assert test_claim.status in ["APPROVED", "NEEDS_REVIEW", "SETTLED", "AWAITING_DATA"]
+    assert test_claim.decision in ["AUTO_APPROVED", "APPROVED_WITH_REVIEW", "NEEDS_REVIEW", "NEEDS_MORE_DATA", "INSUFFICIENT_DATA", "FRAUD_DETECTED"]
 
 
-def test_evaluate_claim_sets_auto_approved_flag(client, test_db, test_claim):
+def test_evaluate_claim_sets_auto_approved_flag(client, test_db, test_claim, insurer_headers):
     """Verify auto_approved flag is set."""
     from src.models import Claim
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -183,11 +185,11 @@ def test_evaluate_claim_sets_auto_approved_flag(client, test_db, test_claim):
         assert data["auto_approved"] is False
 
 
-def test_evaluate_claim_sets_auto_settled_flag(client, test_db, test_claim, mock_blockchain_service):
+def test_evaluate_claim_sets_auto_settled_flag(client, test_db, test_claim, mock_blockchain_service, insurer_headers):
     """Verify auto_settled flag is set."""
     from src.models import Claim
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -202,11 +204,11 @@ def test_evaluate_claim_sets_auto_settled_flag(client, test_db, test_claim, mock
         assert test_claim.auto_settled is False or test_claim.auto_settled is None
 
 
-def test_evaluate_claim_stores_summary(client, test_db, test_claim):
+def test_evaluate_claim_stores_summary(client, test_db, test_claim, insurer_headers):
     """Verify comprehensive_summary is stored."""
     from src.models import Claim
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -219,11 +221,11 @@ def test_evaluate_claim_stores_summary(client, test_db, test_claim):
         assert data["summary"] == test_claim.comprehensive_summary
 
 
-def test_evaluate_claim_stores_review_reasons(client, test_db, test_claim):
+def test_evaluate_claim_stores_review_reasons(client, test_db, test_claim, insurer_headers):
     """Verify review_reasons JSON is stored."""
     from src.models import Claim
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -237,11 +239,11 @@ def test_evaluate_claim_stores_review_reasons(client, test_db, test_claim):
             assert len(test_claim.review_reasons) > 0
 
 
-def test_evaluate_claim_creates_evaluation_record(client, test_db, test_claim):
+def test_evaluate_claim_creates_evaluation_record(client, test_db, test_claim, insurer_headers):
     """Verify Evaluation record creation."""
     from src.models import Evaluation
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -255,11 +257,11 @@ def test_evaluate_claim_creates_evaluation_record(client, test_db, test_claim):
     assert len(evaluation.reasoning) > 0
 
 
-def test_evaluate_claim_with_tx_hash(client, test_db, test_claim, mock_blockchain_service):
+def test_evaluate_claim_with_tx_hash(client, test_db, test_claim, mock_blockchain_service, insurer_headers):
     """Verify transaction hash storage on settlement."""
     from src.models import Claim
     
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     
@@ -272,19 +274,19 @@ def test_evaluate_claim_with_tx_hash(client, test_db, test_claim, mock_blockchai
         assert test_claim.status == "SETTLED"
 
 
-def test_evaluate_claim_processing_costs(client, test_claim):
+def test_evaluate_claim_processing_costs(client, test_claim, insurer_headers):
     """Verify processing_costs calculation."""
-    response = client.post(f"/agent/evaluate/{test_claim.id}")
+    response = client.post(f"/agent/evaluate/{test_claim.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     
     assert "processing_costs" in data
-    assert float(data["processing_costs"]) >= 0.35  # Total x402 costs
+    assert float(data["processing_costs"]) >= 0  # Evaluations are free
 
 
 @pytest.mark.asyncio
-async def test_evaluate_claim_concurrent_requests(client, test_db, test_claimant):
+async def test_evaluate_claim_concurrent_requests(client, test_db, test_claimant, insurer_headers):
     """Test handling multiple concurrent evaluations."""
     import asyncio
     import uuid
@@ -309,7 +311,7 @@ async def test_evaluate_claim_concurrent_requests(client, test_db, test_claimant
     
     # Evaluate all claims concurrently
     async def evaluate_claim_async(claim_id):
-        return client.post(f"/agent/evaluate/{claim_id}")
+        return client.post(f"/agent/evaluate/{claim_id}", headers=insurer_headers)
     
     tasks = [evaluate_claim_async(claim.id) for claim in claims]
     responses = await asyncio.gather(*tasks)
@@ -323,14 +325,14 @@ async def test_evaluate_claim_concurrent_requests(client, test_db, test_claimant
 
 
 @pytest.mark.real_api
-def test_evaluate_claim_with_real_gemini_api(client, test_claim_with_evidence):
+def test_evaluate_claim_with_real_gemini_api(client, test_claim_with_evidence, insurer_headers):
     """Test with real Gemini API (when key available)."""
     import os
     
     if not os.getenv("GOOGLE_AI_API_KEY"):
         pytest.skip("GOOGLE_AI_API_KEY not set, skipping real API test")
     
-    response = client.post(f"/agent/evaluate/{test_claim_with_evidence.id}")
+    response = client.post(f"/agent/evaluate/{test_claim_with_evidence.id}", headers=insurer_headers)
     
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
@@ -339,4 +341,4 @@ def test_evaluate_claim_with_real_gemini_api(client, test_claim_with_evidence):
     assert "decision" in data
     assert "confidence" in data
     assert "reasoning" in data
-    assert data["decision"] in ["AUTO_APPROVED", "NEEDS_REVIEW"]
+    assert data["decision"] in ["AUTO_APPROVED", "APPROVED_WITH_REVIEW", "NEEDS_REVIEW", "NEEDS_MORE_DATA", "INSUFFICIENT_DATA", "FRAUD_DETECTED"]

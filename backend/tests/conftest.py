@@ -117,6 +117,21 @@ def test_insurer(test_db):
 
 
 @pytest.fixture
+def insurer_wallet(test_db, test_insurer):
+    """Create a UserWallet for the insurer (required for /challenge and /complete)."""
+    wallet = UserWallet(
+        user_id=test_insurer.id,
+        wallet_address="0xabcdef123456789012345678901234567890abcd",
+        circle_wallet_id="test-insurer-circle-wallet-id",
+        wallet_set_id="test-wallet-set-id",
+    )
+    test_db.add(wallet)
+    test_db.commit()
+    test_db.refresh(wallet)
+    return wallet
+
+
+@pytest.fixture
 def auth_headers(client, test_claimant):
     """Get JWT token headers for authenticated requests."""
     response = client.post(
@@ -166,38 +181,25 @@ def test_claim(test_db, test_claimant):
 
 @pytest.fixture
 def mock_gateway_service():
-    """Mock GatewayService for x402 tests."""
+    """Mock GatewayService (get_balance only). x402 create_micropayment/validate_receipt are deprecated."""
     with patch("src.services.gateway.get_gateway_service") as mock_get:
         mock_service = AsyncMock()
-        mock_service.validate_receipt = AsyncMock(return_value=True)
-        mock_service.create_micropayment = AsyncMock(return_value="mock_receipt_token_12345")
         mock_service.get_balance = AsyncMock(return_value=Decimal("100.00"))
         mock_get.return_value = mock_service
         yield mock_service
 
 
 @pytest.fixture
-def mock_x402_client():
-    """Mock X402Client for agent tool tests."""
-    with patch("src.services.x402_client.get_x402_client") as mock_get:
-        mock_client = AsyncMock()
-        mock_client.verify_document = AsyncMock(return_value={
-            "extracted_data": {"amount": 1000.0},
-            "valid": True,
-            "verification_id": "test-verification-id"
-        })
-        mock_client.verify_image = AsyncMock(return_value={
-            "damage_assessment": {"severity": "moderate"},
-            "valid": True,
-            "analysis_id": "test-analysis-id"
-        })
-        mock_client.verify_fraud = AsyncMock(return_value={
-            "fraud_score": 0.05,
-            "risk_level": "LOW",
-            "check_id": "test-check-id"
-        })
-        mock_get.return_value = mock_client
-        yield mock_client
+def mock_verifier_client():
+    """Mock verifier_client for agent tool tests. Evaluations are free; no x402."""
+    # Patch where tools imports them (src.agent.tools)
+    with patch("src.agent.tools._verify_document", new_callable=AsyncMock) as m_doc, \
+         patch("src.agent.tools._verify_image", new_callable=AsyncMock) as m_img, \
+         patch("src.agent.tools._verify_fraud", new_callable=AsyncMock) as m_fraud:
+        m_doc.return_value = {"extracted_data": {"amount": 1000.0}, "valid": True, "verification_id": "test-verification-id"}
+        m_img.return_value = {"damage_assessment": {"severity": "moderate"}, "valid": True, "analysis_id": "test-analysis-id"}
+        m_fraud.return_value = {"fraud_score": 0.05, "risk_level": "LOW", "check_id": "test-check-id"}
+        yield {"verify_document": m_doc, "verify_image": m_img, "verify_fraud": m_fraud}
 
 
 @pytest.fixture
