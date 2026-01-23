@@ -44,6 +44,7 @@ export function Navbar({ walletAddress, role, onConnect, onDisconnect }: NavbarP
                 width={220}
                 height={60}
                 className="h-40 sm:h-70 w-auto mt-5"
+                unoptimized
                 priority
               />
             </Link>

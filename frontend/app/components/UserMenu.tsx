@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './ui';
 import { useAuth } from '../providers/AuthProvider';
+import { WalletInfoModal } from './WalletInfoModal';
 
 type Align = 'left' | 'right';
 
@@ -15,6 +16,7 @@ export function UserMenu({
 }) {
   const { user, logout, role } = useAuth();
   const [open, setOpen] = useState(false);
+  const [showWalletModal, setShowWalletModal] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const menuSideClass = useMemo(() => (align === 'right' ? 'right-0' : 'left-0'), [align]);
@@ -61,12 +63,21 @@ export function UserMenu({
         type="button"
         variant="ghost"
         size="sm"
-        className="rounded-full w-10 h-10 p-0 flex items-center justify-center bg-primary/20 hover:bg-primary/30 text-white font-semibold"
+        className="rounded-full w-10 h-10 p-0 flex items-center justify-center bg-primary/20 hover:bg-primary/30 text-white font-semibold relative"
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
         {getUserInitial()}
+        {/* Dropdown indicator - more visible */}
+        <svg 
+          className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 text-white bg-blue-cobalt rounded-full p-0.5 shadow-lg shadow-blue-cobalt/50 border border-white/20" 
+          fill="none" 
+          viewBox="0 0 24 24" 
+          stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+        </svg>
       </Button>
 
       {open && (
@@ -88,7 +99,21 @@ export function UserMenu({
               </div>
             </div>
           </div>
-          <div className="p-2">
+          <div className="p-2 space-y-1">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setShowWalletModal(true);
+              }}
+              className="w-full text-left rounded-lg px-3 py-2 text-sm font-semibold text-text-primary hover:bg-surface-muted transition-colors flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              View Wallet
+            </button>
             <button
               type="button"
               role="menuitem"
@@ -100,6 +125,11 @@ export function UserMenu({
           </div>
         </div>
       )}
+      
+      <WalletInfoModal
+        isOpen={showWalletModal}
+        onClose={() => setShowWalletModal(false)}
+      />
     </div>
   );
 }

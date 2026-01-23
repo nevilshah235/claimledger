@@ -10,19 +10,19 @@ import Image from 'next/image';
 
 const features = [
   {
-    icon: '/icons/gemini-logo.svg',
+    icon: '/icons/gemini-logo.png',
     title: 'AI Agent',
     subtitle: 'Powered by Gemini',
     description: 'Autonomous claim evaluation with multimodal document and image analysis.',
   },
   {
-    icon: '/icons/circle-logo.svg',
+    icon: '/icons/circle-logo.png',
     title: 'x402 Payments',
     subtitle: 'Circle Gateway',
     description: 'Real micropayments for each verification step. Pay-per-use AI services.',
   },
   {
-    icon: '/icons/arc-logo.svg',
+    icon: '/icons/arc-logo.png',
     title: 'USDC Settlement',
     subtitle: 'On Arc Blockchain',
     description: 'Instant, transparent settlements in USDC on the Arc blockchain network.',
@@ -261,6 +261,7 @@ export default function HomePage() {
                       height={56}
                       className="h-14 sm:h-16 w-auto object-contain object-left"
                       style={{ maxWidth: 'none' }}
+                      unoptimized
                     />
                   </div>
 
@@ -365,6 +366,7 @@ export default function HomePage() {
               width={120}
               height={30}
               className="h-6 w-auto"
+              unoptimized
             />
             <span className="sr-only">UClaim</span>
           </div>

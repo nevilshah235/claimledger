@@ -357,20 +357,42 @@ async def get_wallet_info(
             detail="Wallet not found for user. Please create a wallet by logging in and completing the PIN challenge."
         )
     
-    # Get wallet balance (if available)
+    # Get wallet balance and blockchain info
     balance = None
+    blockchain = "ARC-TESTNET"  # Default to ARC-TESTNET since we query for it
+    
     try:
-        # For User-Controlled wallets, balance fetching might require user token
-        # For now, return None - can be enhanced later
-        pass
-    except Exception:
-        pass  # Balance fetch is optional
+        # Try to fetch balance from Circle API if we have a wallet ID
+        if user_wallet.circle_wallet_id and circle_service.api_key:
+            import logging
+            logging.info(f"Fetching balance for wallet {user_wallet.circle_wallet_id}")
+            try:
+                # Fetch balance from Circle API
+                balance_data = await circle_service.get_wallet_balance(
+                    user_wallet.circle_wallet_id,
+                    chain="ARC"  # Circle API uses "ARC" for ARC-TESTNET
+                )
+                logging.info(f"Balance data received: {balance_data}")
+                # Always return balance data, even if empty (so frontend knows we tried)
+                balance = balance_data
+            except Exception as e:
+                import logging
+                logging.error(f"Could not fetch balance from Circle: {e}", exc_info=True)
+                # Return empty balance structure on error
+                balance = {
+                    "balances": [],
+                    "wallet_id": user_wallet.circle_wallet_id
+                }
+    except Exception as e:
+        import logging
+        logging.error(f"Error in balance fetching logic: {e}", exc_info=True)
+        # Balance fetch is optional, continue without it
     
     return WalletInfoResponse(
         wallet_address=user_wallet.wallet_address,
         circle_wallet_id=user_wallet.circle_wallet_id,
         wallet_set_id=user_wallet.wallet_set_id,
-        blockchain="ARC",  # Default to ARC
+        blockchain=blockchain,
         balance=balance
     )
 

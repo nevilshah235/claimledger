@@ -89,7 +89,14 @@ function LoginForm() {
     <>
       <div className="mb-8 text-center">
         <Link href="/" className="inline-flex flex-col items-center gap-0 text-blue hover:text-blue-light transition-colors">
-          <Image src="/uclaim-logo-transparent.png" alt="UClaim" width={1400} height={360} className="h-24 w-auto" />
+          <Image 
+            src="/uclaim-logo-transparent.png" 
+            alt="UClaim" 
+            width={1400} 
+            height={360} 
+            className="h-24 w-auto"
+            unoptimized
+          />
           <span className="sr-only">UClaim</span>
           <p className="text-blue-metallic -mt-2 italic">{subtitle}</p>
         </Link>

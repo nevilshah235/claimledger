@@ -57,6 +57,7 @@ htmlcov/
 # Node
 node_modules/
 .next/
+.next.old/
 out/
 dist/
 *.log

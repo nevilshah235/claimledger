@@ -171,21 +171,27 @@ export function EnableSettlementsModal({
         {/* Hero Section with Circle and Arc Icons */}
         <div className="text-center">
           <div className="flex items-center justify-center gap-4 mb-6">
-            <Image 
-              src="/icons/circle-logo.svg" 
-              alt="Circle" 
-              width={100} 
-              height={100}
-              className="h-20 w-auto"
-            />
+            <div className="relative h-20 w-auto">
+              <Image 
+                src="/icons/circle-logo.png" 
+                alt="Circle" 
+                width={100} 
+                height={100}
+                className="h-20 w-auto object-contain"
+                unoptimized
+              />
+            </div>
             <div className="text-slate-400 text-3xl font-semibold">+</div>
-            <Image 
-              src="/icons/arc-logo.svg" 
-              alt="Arc" 
-              width={100} 
-              height={100}
-              className="h-20 w-auto"
-            />
+            <div className="relative h-20 w-auto">
+              <Image 
+                src="/icons/arc-logo.png" 
+                alt="Arc" 
+                width={100} 
+                height={100}
+                className="h-20 w-auto object-contain"
+                unoptimized
+              />
+            </div>
           </div>
           <h2 className="text-2xl font-bold text-slate-900 mb-3">
             Enable On-Chain Payments
