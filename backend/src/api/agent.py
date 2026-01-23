@@ -5,20 +5,22 @@ POST /agent/evaluate/{claimId} - Trigger AI agent evaluation
 Uses Google Agents Framework with Gemini for claim evaluation.
 """
 
-import uuid
+import logging
 import os
+import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models import Claim, Evidence, Evaluation, AgentResult, AgentLog, UserWallet
 from ..agent.adk_agents.orchestrator import get_adk_orchestrator
-from ..agent.tools import set_wallet_address
 from ..api.auth import get_current_user
+from ..database import get_db
+from ..models import Claim, Evidence, Evaluation, AgentResult, AgentLog
+from ..services.gas_tracking import record_settlement_gas
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -84,6 +86,7 @@ class EvaluationResponse(BaseModel):
     auto_settled: bool = False
     tx_hash: Optional[str] = None
     review_reasons: Optional[list] = None
+    contradictions: Optional[list] = None  # Specific contradictions (admin only)
     requested_data: Optional[list] = None  # Types of additional data requested
     human_review_required: Optional[bool] = False  # Human-in-the-loop flag
     agent_results: Optional[Dict[str, Any]] = None  # Structured agent results
@@ -117,12 +120,8 @@ async def evaluate_claim(
     Trigger AI agent evaluation of a claim.
     
     The agent will:
-    1. Call verify_document (x402 payment: $0.05)
-    2. Call verify_image (x402 payment: $0.10)
-    3. Call verify_fraud (x402 payment: $0.05)
-    4. Make decision based on results
-    
-    Total cost: ~$0.20 USDC per evaluation (paid by insurer wallet)
+    1. Call verify_document, verify_image, verify_fraud (evaluations are free)
+    2. Make decision based on results
     
     Decision rules:
     - confidence >= 0.85 → APPROVED
@@ -174,39 +173,28 @@ async def evaluate_claim(
             "WARNING"
         )
     
-    # Set wallet address in context for x402 payments
-    # Use insurer's wallet address from UserWallet table for agent payments
-    wallet_address = None
-    if current_user:
-        # Get wallet address from UserWallet table
-        user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
-        wallet_address = user_wallet.wallet_address if user_wallet else None
-        
-        if wallet_address:
-            set_wallet_address(wallet_address)
-            log_agent_activity(
-                db, claim_id, "orchestrator",
-                f"Using insurer wallet for x402 payments: {wallet_address[:10]}...",
-                "INFO", {"wallet_address": wallet_address[:10] + "..."}
-            )
-        else:
-            log_agent_activity(
-                db, claim_id, "orchestrator",
-                "Warning: Insurer wallet address not found, x402 payments may fail",
-                "WARNING"
-            )
-    else:
-        log_agent_activity(
-            db, claim_id, "orchestrator",
-            "Warning: Current user not available, x402 payments may fail",
-            "WARNING"
-        )
-    
     # Run multi-agent evaluation using ADK orchestrator
     # Pass db session so orchestrator can log activities
-    orchestrator = get_adk_orchestrator()
-    evaluation_result = await orchestrator.evaluate_claim(claim, evidence, db=db)
-    
+    try:
+        orchestrator = get_adk_orchestrator()
+        evaluation_result = await orchestrator.evaluate_claim(claim, evidence, db=db)
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.exception("Orchestrator evaluate_claim failed for claim %s", claim_id)
+        log_agent_activity(
+            db, claim_id, "orchestrator",
+            f"Evaluation failed: {type(e).__name__}: {e}",
+            "ERROR", {"error_type": type(e).__name__}
+        )
+        claim.status = "NEEDS_REVIEW"
+        existing = (claim.comprehensive_summary or "").strip()
+        claim.comprehensive_summary = (existing + "\n\n[Evaluation failed. You can try triggering evaluation again.]").strip() if existing else "[Evaluation failed. You can try triggering evaluation again.]"
+        db.commit()
+        raise HTTPException(
+            status_code=500,
+            detail="Evaluation failed. The claim has been set to Needs Review; you can try again.",
+        ) from e
+
     # Get agent results from evaluation
     # The orchestrator agent returns tool_results (keyed by tool name like "verify_document")
     # while manual coordination returns agent_results (keyed by agent type like "document")
@@ -280,6 +268,7 @@ async def evaluate_claim(
     claim.auto_approved = (decision == "AUTO_APPROVED")
     claim.auto_settled = evaluation_result.get("auto_settled", False)
     claim.review_reasons = evaluation_result.get("review_reasons")
+    claim.contradictions = evaluation_result.get("contradictions") or []
     claim.requested_data = evaluation_result.get("requested_data", [])
     claim.human_review_required = evaluation_result.get("human_review_required", False)
     
@@ -290,6 +279,10 @@ async def evaluate_claim(
         if evaluation_result.get("tx_hash"):
             claim.tx_hash = evaluation_result["tx_hash"]
             claim.status = "SETTLED"
+            try:
+                record_settlement_gas(claim_id, evaluation_result["tx_hash"], db)
+            except Exception as e:
+                logging.getLogger(__name__).warning("Could not record settlement gas: %s", e)
     elif decision == "FRAUD_DETECTED":
         claim.status = "REJECTED"  # Fraud detected - immediate rejection
         claim.approved_amount = None
@@ -320,89 +313,48 @@ async def evaluate_claim(
     # Use agent_results_dict we built during evaluation
     # (already populated above, no need to query again)
     
-    # Build tool calls list and calculate actual costs based on what agents ran
+    # Build tool calls list. Evaluations are free (processing_costs=0).
     tool_calls_list = []
     total_processing_cost = Decimal("0.00")
-    
-    # Tool costs (in USDC) - reduced costs
-    TOOL_COSTS = {
-        "verify_document": Decimal("0.05"),
-        "verify_image": Decimal("0.10"),
-        "verify_fraud": Decimal("0.05"),
-    }
-    
-    # Extract tool calls from evaluation result if available
+
+    def _cost_for(tool: str):
+        return None if tool == "approve_claim" else 0.0
+
     if "tool_calls" in evaluation_result:
-        for tool_call in evaluation_result["tool_calls"]:
-            tool_name = tool_call.get("tool_name", "")
-            cost = tool_call.get("cost")
-            if cost is not None:
-                total_processing_cost += Decimal(str(cost))
-            
+        for tc in evaluation_result["tool_calls"]:
+            tool_name = tc.get("tool_name", "")
             tool_calls_list.append(ToolCall(
                 tool_name=tool_name,
-                status=tool_call.get("status", "completed"),
-                cost=cost,
-                timestamp=tool_call.get("timestamp")
+                status=tc.get("status", "completed"),
+                cost=_cost_for(tool_name),
+                timestamp=tc.get("timestamp"),
             ))
     else:
-        # Fallback: infer tool calls from agent results (dynamic based on what ran)
         if "document" in agent_results_dict:
-            cost = float(TOOL_COSTS["verify_document"])
-            total_processing_cost += TOOL_COSTS["verify_document"]
-            tool_calls_list.append(ToolCall(
-                tool_name="verify_document",
-                status="completed",
-                cost=cost,
-                timestamp=None
-            ))
-        
+            tool_calls_list.append(ToolCall(tool_name="verify_document", status="completed", cost=0.0, timestamp=None))
         if "image" in agent_results_dict:
-            cost = float(TOOL_COSTS["verify_image"])
-            total_processing_cost += TOOL_COSTS["verify_image"]
-            tool_calls_list.append(ToolCall(
-                tool_name="verify_image",
-                status="completed",
-                cost=cost,
-                timestamp=None
-            ))
-        
-        # Fraud agent always runs (doesn't depend on evidence type)
+            tool_calls_list.append(ToolCall(tool_name="verify_image", status="completed", cost=0.0, timestamp=None))
         if "fraud" in agent_results_dict:
-            cost = float(TOOL_COSTS["verify_fraud"])
-            total_processing_cost += TOOL_COSTS["verify_fraud"]
-            tool_calls_list.append(ToolCall(
-                tool_name="verify_fraud",
-                status="completed",
-                cost=cost,
-                timestamp=None
-            ))
-        
-        # Settlement is not a cost
+            tool_calls_list.append(ToolCall(tool_name="verify_fraud", status="completed", cost=0.0, timestamp=None))
         if claim.auto_settled and claim.tx_hash:
-            tool_calls_list.append(ToolCall(
-                tool_name="approve_claim",
-                status="completed",
-                cost=None,  # Settlement, not a cost
-                timestamp=None
-            ))
-    
-    # Update claim with actual processing costs
+            tool_calls_list.append(ToolCall(tool_name="approve_claim", status="completed", cost=None, timestamp=None))
+
     claim.processing_costs = total_processing_cost
     db.commit()
-    
+
     return EvaluationResponse(
         claim_id=str(claim_id),
         decision=decision,
         confidence=evaluation_result["confidence"],
         approved_amount=float(claim.approved_amount) if claim.approved_amount else None,
         reasoning=reasoning_text or evaluation_result.get("summary", ""),
-        processing_costs=float(total_processing_cost),  # Dynamic cost based on actual usage
+        processing_costs=0.0,  # Evaluations are free
         summary=evaluation_result.get("summary"),
         auto_approved=claim.auto_approved,
         auto_settled=claim.auto_settled,
         tx_hash=evaluation_result.get("tx_hash"),
         review_reasons=evaluation_result.get("review_reasons"),
+        contradictions=evaluation_result.get("contradictions"),
         requested_data=evaluation_result.get("requested_data", []),
         human_review_required=evaluation_result.get("human_review_required", False),
         agent_results=agent_results_dict,
@@ -645,21 +597,19 @@ def _convert_tool_results_to_agent_results(tool_results: Dict[str, Any]) -> Dict
     
     The orchestrator agent returns tool_results with keys like "verify_document",
     but we need agent_results with keys like "document" to store in the database.
+    Mapped: verify_document->document, verify_image->image, verify_fraud->fraud.
+    All other tools (estimate_repair_cost, cross_check_amounts, validate_claim_data, etc.)
+    are stored with their tool name as agent_type so the UI can show extracted/analysis info.
     """
     agent_results = {}
-    
-    # Map tool names to agent types
     tool_to_agent = {
         "verify_document": "document",
         "verify_image": "image",
-        "verify_fraud": "fraud"
+        "verify_fraud": "fraud",
     }
-    
     for tool_name, tool_result in tool_results.items():
-        agent_type = tool_to_agent.get(tool_name)
-        if agent_type:
-            agent_results[agent_type] = tool_result
-    
+        agent_type = tool_to_agent.get(tool_name, tool_name)
+        agent_results[agent_type] = tool_result
     return agent_results
 
 

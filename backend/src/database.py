@@ -66,6 +66,10 @@ def init_db():
                 cols = [row[1] for row in conn.execute(text("PRAGMA table_info(claims)")).fetchall()]
                 if "description" not in cols:
                     conn.execute(text("ALTER TABLE claims ADD COLUMN description TEXT"))
+                if "decision_overridden" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN decision_overridden INTEGER DEFAULT 0"))
+                if "contradictions" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN contradictions TEXT"))
             elif dialect == "postgresql":
                 exists = conn.execute(
                     text(
@@ -78,6 +82,28 @@ def init_db():
                 ).first()
                 if not exists:
                     conn.execute(text("ALTER TABLE claims ADD COLUMN description TEXT"))
+                exists_do = conn.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = 'claims' AND column_name = 'decision_overridden'
+                        """
+                    )
+                ).first()
+                if not exists_do:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN decision_overridden BOOLEAN DEFAULT FALSE"))
+                exists_c = conn.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name = 'claims' AND column_name = 'contradictions'
+                        """
+                    )
+                ).first()
+                if not exists_c:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN contradictions JSON"))
 
         db_info = DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL
         # Don't log full connection string for security

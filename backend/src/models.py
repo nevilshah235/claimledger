@@ -17,6 +17,23 @@ def generate_uuid():
     return str(uuid4())
 
 
+class SettlementGas(Base):
+    """Gas paid for a settlement transaction (cached from Arc RPC)."""
+
+    __tablename__ = "settlement_gas"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    claim_id = Column(String(36), ForeignKey("claims.id"), nullable=False)
+    tx_hash = Column(String(66), nullable=False, unique=True)
+    gas_used = Column(Integer, nullable=False)
+    gas_price_wei = Column(Integer, nullable=False)
+    cost_wei = Column(Integer, nullable=False)
+    cost_arc = Column(Numeric(24, 18), nullable=False)  # cost_wei / 1e18
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    claim = relationship("Claim", back_populates="settlement_gas")
+
+
 class Claim(Base):
     """Claim model - stores claim metadata and status."""
 
@@ -42,9 +59,11 @@ class Claim(Base):
     auto_approved = Column(Boolean, default=False)  # Auto-approved by AI agent
     auto_settled = Column(Boolean, default=False)  # Auto-settled on blockchain
     comprehensive_summary = Column(Text, nullable=True)  # AI-generated summary
-    review_reasons = Column(JSON, nullable=True)  # Reasons for manual review
+    review_reasons = Column(JSON, nullable=True)  # Reasons for manual review (admin only)
+    contradictions = Column(JSON, nullable=True)  # Specific contradictions, e.g. amount mismatches (admin only)
     requested_data = Column(JSON, nullable=True)  # Types of additional data requested by agent
     human_review_required = Column(Boolean, default=False)  # Flag for human-in-the-loop
+    decision_overridden = Column(Boolean, default=False)  # True when insurer overrode AI via override-decision
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -54,6 +73,7 @@ class Claim(Base):
     x402_receipts = relationship("X402Receipt", back_populates="claim", cascade="all, delete-orphan")
     agent_results = relationship("AgentResult", back_populates="claim", cascade="all, delete-orphan")
     agent_logs = relationship("AgentLog", back_populates="claim", cascade="all, delete-orphan")
+    settlement_gas = relationship("SettlementGas", back_populates="claim", uselist=False, cascade="all, delete-orphan")
 
 
 class Evidence(Base):

@@ -2,6 +2,7 @@
 Admin API endpoints.
 GET /admin/fees - Get admin wallet balance and evaluation fee tracking
 GET /admin/status - Check if admin auto-login is available
+GET /admin/auto-settle-wallet - Auto-settle (developer) wallet address and balances
 """
 
 from decimal import Decimal
@@ -12,15 +13,27 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import os
 import logging
+import uuid
 
 from ..database import get_db
-from ..models import X402Receipt, Claim, User, UserWallet
+from ..models import X402Receipt, Claim, User, UserWallet, SettlementGas
 from ..api.auth import get_current_user, get_circle_wallets_service
-from ..services.gateway import get_gateway_service
+from ..services.gas_tracking import record_settlement_gas
+from ..services import arc_rpc
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+class AutoSettleWalletResponse(BaseModel):
+    """Response for GET /admin/auto-settle-wallet."""
+    configured: bool
+    address: Optional[str] = None
+    usdc_balance: Optional[float] = None
+    eurc_balance: Optional[float] = None
+    gas_balance_arc: Optional[float] = None
+    message: Optional[str] = None
 
 
 class FeeBreakdown(BaseModel):
@@ -28,6 +41,15 @@ class FeeBreakdown(BaseModel):
     claim_id: str
     total_cost: float
     tool_costs: Dict[str, float]  # tool_name -> cost
+    timestamp: str
+
+
+class GasBreakdown(BaseModel):
+    """Gas paid for a single settlement transaction."""
+    claim_id: str
+    tx_hash: str
+    gas_used: int
+    cost_arc: float
     timestamp: str
 
 
@@ -39,6 +61,8 @@ class FeeTrackingResponse(BaseModel):
     total_evaluations: int  # Number of evaluations
     average_cost_per_evaluation: float
     fee_breakdown: List[FeeBreakdown]  # Recent evaluations with costs
+    total_gas_arc: float  # Total gas (native token) paid for settlement txs
+    gas_breakdown: List[GasBreakdown]  # Per-tx gas
 
 
 class AdminStatusResponse(BaseModel):
@@ -47,6 +71,50 @@ class AdminStatusResponse(BaseModel):
     admin_wallet_address: Optional[str] = None
     admin_user_exists: bool = False
     message: str
+
+
+class ResetEvaluatingResponse(BaseModel):
+    """Response for reset-evaluating stuck claims."""
+    claim_id: str
+    status: str
+    message: str
+
+
+@router.post("/claims/{claim_id}/reset-evaluating", response_model=ResetEvaluatingResponse)
+async def reset_evaluating_claim(
+    claim_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Reset a claim stuck in EVALUATING back to SUBMITTED so evaluation can be retried.
+    Insurer-only. Use when evaluation has failed or timed out and the claim never left EVALUATING.
+    """
+    if not current_user or current_user.role != "insurer":
+        raise HTTPException(status_code=403, detail="Only insurers can reset stuck evaluations")
+
+    try:
+        uuid.UUID(claim_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid claim ID format")
+
+    claim = db.query(Claim).filter(Claim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    if claim.status != "EVALUATING":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Claim is not stuck in EVALUATING (current status: {claim.status})",
+        )
+
+    claim.status = "SUBMITTED"
+    db.commit()
+
+    return ResetEvaluatingResponse(
+        claim_id=claim_id,
+        status="SUBMITTED",
+        message="Claim reset to SUBMITTED. You can trigger evaluation again.",
+    )
 
 
 @router.get("/status", response_model=AdminStatusResponse)
@@ -109,6 +177,50 @@ async def get_admin_status(
     )
 
 
+@router.get("/auto-settle-wallet", response_model=AutoSettleWalletResponse)
+async def get_auto_settle_wallet(
+    current_user=Depends(get_current_user),
+):
+    """
+    Get auto-settle (developer) wallet address and balances.
+    Used when the AI auto-approves a claim; requires AUTO_SETTLE_PRIVATE_KEY.
+    Insurer-only.
+    """
+    if not current_user or current_user.role != "insurer":
+        raise HTTPException(status_code=403, detail="Only insurers can access auto-settle wallet")
+
+    pk = os.getenv("AUTO_SETTLE_PRIVATE_KEY")
+    if not pk or not pk.strip():
+        return AutoSettleWalletResponse(
+            configured=False,
+            message="Set AUTO_SETTLE_PRIVATE_KEY to enable auto-settlement.",
+        )
+
+    try:
+        from eth_account import Account
+        acct = Account.from_key(pk)
+        address = acct.address
+    except Exception as e:
+        logger.warning("get_auto_settle_wallet: invalid key: %s", e)
+        return AutoSettleWalletResponse(
+            configured=False,
+            message="AUTO_SETTLE_PRIVATE_KEY is set but invalid. Check the key format.",
+        )
+
+    usdc = arc_rpc.usdc_balance_of(address)
+    # eurc = arc_rpc.eurc_balance_of(address)  # EURC commented out for now
+    gas_wei = arc_rpc.get_balance_wei(address)
+    gas_arc = float(gas_wei) / 1e18 if gas_wei is not None else None
+
+    return AutoSettleWalletResponse(
+        configured=True,
+        address=address,
+        usdc_balance=float(usdc) if usdc is not None else None,
+        # eurc_balance=float(eurc) if eurc is not None else None,  # EURC commented out
+        gas_balance_arc=gas_arc,
+    )
+
+
 @router.get("/fees", response_model=FeeTrackingResponse)
 async def get_fee_tracking(
     db: Session = Depends(get_db),
@@ -141,7 +253,9 @@ async def get_fee_tracking(
             total_spent=0.0,
             total_evaluations=0,
             average_cost_per_evaluation=0.0,
-            fee_breakdown=[]
+            fee_breakdown=[],
+            total_gas_arc=0.0,
+            gas_breakdown=[],
         )
     
     wallet_address = user_wallet.wallet_address
@@ -157,11 +271,18 @@ async def get_fee_tracking(
                 f"Fetching Circle Wallets balance for wallet {wallet_address[:10]}... "
                 f"(Circle ID: {user_wallet.circle_wallet_id})"
             )
+            user_token = None
             try:
-                # Fetch balance from Circle API (same as /auth/wallet)
+                token_data = await circle_service.create_user_token(str(current_user.id))
+                user_token = token_data.get("userToken") or token_data.get("user_token")
+            except Exception as e:
+                logger.warning(f"Could not create user token for balance fetch: {e}")
+            try:
+                # User-controlled wallets require X-User-Token; pass user_token
                 balance_data = await circle_service.get_wallet_balance(
                     user_wallet.circle_wallet_id,
-                    chain="ARC"
+                    chain="ARC",
+                    user_token=user_token,
                 )
                 logger.info(f"Balance data received: {balance_data}")
                 # Return full balance data structure (same as /auth/wallet)
@@ -223,6 +344,25 @@ async def get_fee_tracking(
             tool_costs=tool_costs,
             timestamp=row.latest_receipt.isoformat() if row.latest_receipt else ""
         ))
+
+    # --- Settlement gas: backfill missing, then aggregate ---
+    settled = db.query(Claim).filter(Claim.status == "SETTLED", Claim.tx_hash.isnot(None)).all()
+    for c in settled:
+        if c.tx_hash and not db.query(SettlementGas).filter(SettlementGas.tx_hash == c.tx_hash).first():
+            record_settlement_gas(str(c.id), c.tx_hash, db)
+
+    total_gas_arc = float(db.query(func.sum(SettlementGas.cost_arc)).scalar() or 0)
+    gas_rows = db.query(SettlementGas).order_by(SettlementGas.created_at.desc()).limit(20).all()
+    gas_breakdown = [
+        GasBreakdown(
+            claim_id=g.claim_id,
+            tx_hash=g.tx_hash,
+            gas_used=g.gas_used,
+            cost_arc=float(g.cost_arc),
+            timestamp=g.created_at.isoformat() if g.created_at else "",
+        )
+        for g in gas_rows
+    ]
     
     return FeeTrackingResponse(
         wallet_address=wallet_address,
@@ -230,5 +370,7 @@ async def get_fee_tracking(
         total_spent=total_spent,
         total_evaluations=total_evaluations,
         average_cost_per_evaluation=average_cost,
-        fee_breakdown=fee_breakdown
+        fee_breakdown=fee_breakdown,
+        total_gas_arc=total_gas_arc,
+        gas_breakdown=gas_breakdown,
     )

@@ -481,12 +481,16 @@ async def get_wallet_info(
     """
     user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
     
-    # If no wallet in DB, try to fetch from Circle
+    # If no wallet in DB, try to fetch from Circle (user-controlled: list_wallets with user_token)
     if not user_wallet:
         try:
             if circle_service.app_id:
-                # Get wallets from Circle for this user
-                wallets = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
+                token_data = await circle_service.create_user_token(str(current_user.id))
+                ut = token_data.get("userToken") or token_data.get("user_token")
+                if ut:
+                    wallets = await circle_service.list_wallets(ut)
+                else:
+                    wallets = []
                 if wallets and len(wallets) > 0:
                     wallet = wallets[0]
                     # Store in DB for future reference
@@ -513,23 +517,27 @@ async def get_wallet_info(
     blockchain = "ARC-TESTNET"  # Default to ARC-TESTNET since we query for it
     
     try:
-        # Try to fetch balance from Circle API if we have a wallet ID
+        # Try to fetch balance from Circle API if we have a wallet ID.
+        # User-controlled wallets require X-User-Token; get user_token first.
         if user_wallet.circle_wallet_id and circle_service.api_key:
             import logging
             logging.info(f"Fetching balance for wallet {user_wallet.circle_wallet_id}")
+            user_token = None
             try:
-                # Fetch balance from Circle API
+                token_data = await circle_service.create_user_token(str(current_user.id))
+                user_token = token_data.get("userToken") or token_data.get("user_token")
+            except Exception as e:
+                logging.warning(f"Could not create user token for balance fetch: {e}")
+            try:
                 balance_data = await circle_service.get_wallet_balance(
                     user_wallet.circle_wallet_id,
-                    chain="ARC"  # Circle API uses "ARC" for ARC-TESTNET
+                    chain="ARC",
+                    user_token=user_token,
                 )
                 logging.info(f"Balance data received: {balance_data}")
-                # Always return balance data, even if empty (so frontend knows we tried)
                 balance = balance_data
             except Exception as e:
-                import logging
                 logging.error(f"Could not fetch balance from Circle: {e}", exc_info=True)
-                # Return empty balance structure on error
                 balance = {
                     "balances": [],
                     "wallet_id": user_wallet.circle_wallet_id
@@ -538,7 +546,7 @@ async def get_wallet_info(
         import logging
         logging.error(f"Error in balance fetching logic: {e}", exc_info=True)
         # Balance fetch is optional, continue without it
-    
+
     return WalletInfoResponse(
         wallet_address=user_wallet.wallet_address,
         circle_wallet_id=user_wallet.circle_wallet_id,
@@ -975,9 +983,16 @@ async def circle_connect_status(
             wallets_all = await circle_service.list_wallets(user_token)
             wallets_arc = [w for w in wallets_all if w.get("blockchain") in ["ARC-TESTNET", "ARC", "ARBITRUM"]]
         else:
-            logging.warning(f"Could not create user token for status check, falling back to get_user_wallets")
-            wallets_arc = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
-            wallets_all = await circle_service.get_user_wallets(current_user.id, blockchains=None)
+            # get_user_wallets is developer-style (GET /users/{id}/wallets, no X-User-Token);
+            # for user-controlled it may 404. Use as last-resort fallback.
+            logging.warning("Could not create user token for status check, falling back to get_user_wallets (developer-style; may 404 for user-controlled)")
+            try:
+                wallets_arc = await circle_service.get_user_wallets(current_user.id, blockchains=["ARC-TESTNET"])
+                wallets_all = await circle_service.get_user_wallets(current_user.id, blockchains=None)
+            except Exception as e:
+                logging.warning(f"get_user_wallets fallback failed: {e}")
+                wallets_arc = []
+                wallets_all = []
         
         # Use all wallets (from both queries, deduplicated)
         all_wallets = wallets_arc if wallets_arc else wallets_all
