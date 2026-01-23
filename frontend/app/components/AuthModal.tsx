@@ -17,12 +17,19 @@ interface AuthModalProps {
  * Handles user registration and login for claimants and insurers.
  * Automatically provisions Developer-Controlled wallets via backend.
  */
+const ROLE_DISPLAY_NAMES: Record<'claimant' | 'insurer', string> = {
+  claimant: 'Claimant',
+  insurer: 'Administrator',
+};
+
 export function AuthModal({ isOpen, onClose, onSuccess, role }: AuthModalProps) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  const roleDisplayName = ROLE_DISPLAY_NAMES[role];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,7 +59,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, role }: AuthModalProps) 
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={isLogin ? `Login as ${role}` : `Register as ${role}`}
+      title={isLogin ? `Login as ${roleDisplayName}` : `Register as ${roleDisplayName}`}
       size="sm"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -98,7 +105,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, role }: AuthModalProps) 
               setIsLogin(!isLogin);
               setError(null);
             }}
-            className="text-sm text-cyan-400 hover:text-cyan-300"
+            className="text-sm text-primary hover:text-primary/80"
             disabled={loading}
           >
             {isLogin ? "Don't have an account? Register" : "Already have an account? Login"}
