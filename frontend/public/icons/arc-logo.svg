@@ -1,0 +1,12 @@
+<svg width="160" height="56" viewBox="0 0 160 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="agrad" x1="6" y1="6" x2="62" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B2A78"/>
+      <stop offset="0.55" stop-color="#3B1C5E"/>
+      <stop offset="1" stop-color="#7A1025"/>
+    </linearGradient>
+  </defs>
+  <!-- Arc mark approximation -->
+  <path d="M20 42C16 42 13 38.8 13 35V21C13 17.2 16 14 20 14H34C41.2 14 47 19.8 47 27C47 34.2 41.2 40 34 40H26V32H34C36.8 32 39 29.8 39 27C39 24.2 36.8 22 34 22H21V35C21 38.8 18 42 14 42H20Z" fill="url(#agrad)" opacity="0.9"/>
+  <text x="62" y="38" font-family="system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif" font-size="34" font-weight="700" fill="#3b3b3b">Arc</text>
+</svg>

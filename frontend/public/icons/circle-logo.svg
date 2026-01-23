@@ -1,0 +1,14 @@
+<svg width="220" height="56" viewBox="0 0 220 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cgrad" x1="10" y1="10" x2="46" y2="46" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2FE6C7"/>
+      <stop offset="0.55" stop-color="#4BB7FF"/>
+      <stop offset="1" stop-color="#7A77FF"/>
+    </linearGradient>
+  </defs>
+  <!-- Circle mark approximation -->
+  <path d="M28 48C39.0457 48 48 39.0457 48 28C48 16.9543 39.0457 8 28 8C16.9543 8 8 16.9543 8 28C8 39.0457 16.9543 48 28 48Z" fill="url(#cgrad)" opacity="0.95"/>
+  <path d="M28 41C35.1797 41 41 35.1797 41 28C41 20.8203 35.1797 15 28 15C20.8203 15 15 20.8203 15 28C15 35.1797 20.8203 41 28 41Z" fill="white" opacity="0.88"/>
+  <path d="M28 36C32.4183 36 36 32.4183 36 28C36 23.5817 32.4183 20 28 20C23.5817 20 20 23.5817 20 28C20 32.4183 23.5817 36 28 36Z" fill="url(#cgrad)"/>
+  <text x="62" y="38" font-family="system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif" font-size="34" font-weight="700" fill="#2d2a38" letter-spacing="2">CIRCLE</text>
+</svg>
