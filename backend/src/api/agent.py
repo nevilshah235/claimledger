@@ -15,8 +15,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Claim, Evidence, Evaluation, AgentResult, AgentLog
+from ..models import Claim, Evidence, Evaluation, AgentResult, AgentLog, UserWallet
 from ..agent.adk_agents.orchestrator import get_adk_orchestrator
+from ..agent.tools import set_wallet_address
+from ..api.auth import get_current_user
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -108,16 +110,19 @@ class ChatResponse(BaseModel):
 async def evaluate_claim(
     claim_id: str,
     background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
     """
     Trigger AI agent evaluation of a claim.
     
     The agent will:
-    1. Call verify_document (x402 payment: $0.10)
-    2. Call verify_image (x402 payment: $0.15)
-    3. Call verify_fraud (x402 payment: $0.10)
+    1. Call verify_document (x402 payment: $0.05)
+    2. Call verify_image (x402 payment: $0.10)
+    3. Call verify_fraud (x402 payment: $0.05)
     4. Make decision based on results
+    
+    Total cost: ~$0.20 USDC per evaluation (paid by insurer wallet)
     
     Decision rules:
     - confidence >= 0.85 → APPROVED
@@ -166,6 +171,34 @@ async def evaluate_claim(
         log_agent_activity(
             db, claim_id, "orchestrator",
             "No evidence files found - will request additional data",
+            "WARNING"
+        )
+    
+    # Set wallet address in context for x402 payments
+    # Use insurer's wallet address from UserWallet table for agent payments
+    wallet_address = None
+    if current_user:
+        # Get wallet address from UserWallet table
+        user_wallet = db.query(UserWallet).filter(UserWallet.user_id == current_user.id).first()
+        wallet_address = user_wallet.wallet_address if user_wallet else None
+        
+        if wallet_address:
+            set_wallet_address(wallet_address)
+            log_agent_activity(
+                db, claim_id, "orchestrator",
+                f"Using insurer wallet for x402 payments: {wallet_address[:10]}...",
+                "INFO", {"wallet_address": wallet_address[:10] + "..."}
+            )
+        else:
+            log_agent_activity(
+                db, claim_id, "orchestrator",
+                "Warning: Insurer wallet address not found, x402 payments may fail",
+                "WARNING"
+            )
+    else:
+        log_agent_activity(
+            db, claim_id, "orchestrator",
+            "Warning: Current user not available, x402 payments may fail",
             "WARNING"
         )
     
@@ -291,11 +324,11 @@ async def evaluate_claim(
     tool_calls_list = []
     total_processing_cost = Decimal("0.00")
     
-    # Tool costs (in USDC)
+    # Tool costs (in USDC) - reduced costs
     TOOL_COSTS = {
-        "verify_document": Decimal("0.10"),
-        "verify_image": Decimal("0.15"),
-        "verify_fraud": Decimal("0.10"),
+        "verify_document": Decimal("0.05"),
+        "verify_image": Decimal("0.10"),
+        "verify_fraud": Decimal("0.05"),
     }
     
     # Extract tool calls from evaluation result if available

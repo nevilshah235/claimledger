@@ -13,9 +13,23 @@ Uses USDC on Arc for settlement.
 
 from typing import Dict, Any, Optional
 from decimal import Decimal
+from contextvars import ContextVar
 
 from ..services.x402_client import get_x402_client, X402PaymentError
 from ..services.blockchain import get_blockchain_service
+
+# Context variable to store wallet address for x402 payments
+_wallet_address_ctx: ContextVar[Optional[str]] = ContextVar('wallet_address', default=None)
+
+
+def set_wallet_address(wallet_address: Optional[str]) -> None:
+    """Set wallet address in context for x402 payments."""
+    _wallet_address_ctx.set(wallet_address)
+
+
+def get_wallet_address() -> Optional[str]:
+    """Get wallet address from context for x402 payments."""
+    return _wallet_address_ctx.get()
 
 
 async def verify_document(claim_id: str, document_path: str) -> Dict[str, Any]:
@@ -23,7 +37,7 @@ async def verify_document(claim_id: str, document_path: str) -> Dict[str, Any]:
     Verify a document (invoice, receipt, etc.).
     
     This tool calls the x402-protected /verifier/document endpoint.
-    Payment of $0.10 USDC is handled automatically.
+    Payment of $0.05 USDC is handled automatically.
     
     Args:
         claim_id: Unique claim identifier
@@ -37,15 +51,16 @@ async def verify_document(claim_id: str, document_path: str) -> Dict[str, Any]:
         }
     """
     client = get_x402_client()
+    wallet_address = get_wallet_address()
     
     try:
-        result = await client.verify_document(claim_id, document_path)
+        result = await client.verify_document(claim_id, document_path, wallet_address=wallet_address)
         return {
             "success": True,
             "extracted_data": result.get("extracted_data", {}),
             "valid": result.get("valid", False),
             "verification_id": result.get("verification_id"),
-            "cost": 0.10
+            "cost": 0.05
         }
     except X402PaymentError as e:
         return {
@@ -66,7 +81,7 @@ async def verify_image(claim_id: str, image_path: str) -> Dict[str, Any]:
     Analyze an image (damage photos, etc.).
     
     This tool calls the x402-protected /verifier/image endpoint.
-    Payment of $0.15 USDC is handled automatically.
+    Payment of $0.10 USDC is handled automatically.
     
     Args:
         claim_id: Unique claim identifier
@@ -80,15 +95,16 @@ async def verify_image(claim_id: str, image_path: str) -> Dict[str, Any]:
         }
     """
     client = get_x402_client()
+    wallet_address = get_wallet_address()
     
     try:
-        result = await client.verify_image(claim_id, image_path)
+        result = await client.verify_image(claim_id, image_path, wallet_address=wallet_address)
         return {
             "success": True,
             "damage_assessment": result.get("damage_assessment", {}),
             "valid": result.get("valid", False),
             "analysis_id": result.get("analysis_id"),
-            "cost": 0.15
+            "cost": 0.10
         }
     except X402PaymentError as e:
         return {
@@ -109,7 +125,7 @@ async def verify_fraud(claim_id: str) -> Dict[str, Any]:
     Check for fraud indicators.
     
     This tool calls the x402-protected /verifier/fraud endpoint.
-    Payment of $0.10 USDC is handled automatically.
+    Payment of $0.05 USDC is handled automatically.
     
     Args:
         claim_id: Unique claim identifier
@@ -122,15 +138,16 @@ async def verify_fraud(claim_id: str) -> Dict[str, Any]:
         }
     """
     client = get_x402_client()
+    wallet_address = get_wallet_address()
     
     try:
-        result = await client.verify_fraud(claim_id)
+        result = await client.verify_fraud(claim_id, wallet_address=wallet_address)
         return {
             "success": True,
             "fraud_score": result.get("fraud_score", 0.0),
             "risk_level": result.get("risk_level", "UNKNOWN"),
             "check_id": result.get("check_id"),
-            "cost": 0.10
+            "cost": 0.05
         }
     except X402PaymentError as e:
         return {
@@ -199,7 +216,7 @@ async def approve_claim(claim_id: str, amount: float, recipient: str) -> Dict[st
 TOOL_DEFINITIONS = [
     {
         "name": "verify_document",
-        "description": "Verify a document (invoice, receipt, etc.) for authenticity and extract data. Costs $0.10 USDC.",
+        "description": "Verify a document (invoice, receipt, etc.) for authenticity and extract data. Costs $0.05 USDC.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -217,7 +234,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "verify_image",
-        "description": "Analyze an image (damage photos, etc.) to assess damage and validity. Costs $0.15 USDC.",
+        "description": "Analyze an image (damage photos, etc.) to assess damage and validity. Costs $0.10 USDC.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -235,7 +252,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "verify_fraud",
-        "description": "Check for fraud indicators on a claim. Costs $0.10 USDC.",
+        "description": "Check for fraud indicators on a claim. Costs $0.05 USDC.",
         "parameters": {
             "type": "object",
             "properties": {

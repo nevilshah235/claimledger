@@ -26,10 +26,10 @@ from ..agent.adk_agents import ADKDocumentAgent, ADKImageAgent, ADKFraudAgent
 
 router = APIRouter(prefix="/verifier", tags=["verifier"])
 
-# x402 Pricing (in USDC)
-DOCUMENT_VERIFICATION_PRICE = Decimal("0.10")
-IMAGE_ANALYSIS_PRICE = Decimal("0.15")
-FRAUD_CHECK_PRICE = Decimal("0.10")
+# x402 Pricing (in USDC) - reduced costs
+DOCUMENT_VERIFICATION_PRICE = Decimal("0.05")
+IMAGE_ANALYSIS_PRICE = Decimal("0.10")
+FRAUD_CHECK_PRICE = Decimal("0.05")
 
 
 class PaymentRequiredResponse(BaseModel):
@@ -213,7 +213,7 @@ async def verify_document(
     Verify a document (invoice, receipt, etc.).
     
     **x402 Protected:** Returns HTTP 402 if no valid payment receipt.
-    **Price:** $0.10 USDC
+    **Price:** $0.05 USDC
     
     Returns extracted data and validity assessment.
     """
@@ -270,7 +270,7 @@ async def analyze_image(
     Analyze an image (damage photos, etc.).
     
     **x402 Protected:** Returns HTTP 402 if no valid payment receipt.
-    **Price:** $0.15 USDC
+    **Price:** $0.10 USDC
     
     Returns damage assessment and validity.
     """
@@ -327,7 +327,7 @@ async def check_fraud(
     Check for fraud indicators.
     
     **x402 Protected:** Returns HTTP 402 if no valid payment receipt.
-    **Price:** $0.10 USDC
+    **Price:** $0.05 USDC
     
     Returns fraud score and risk level.
     """

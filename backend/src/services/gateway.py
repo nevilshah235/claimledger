@@ -32,6 +32,8 @@ class GatewayService:
         agent_wallet_address: Optional[str] = None
     ):
         self.api_key = api_key or os.getenv("CIRCLE_GATEWAY_API_KEY")
+        # Legacy support: agent_wallet_address can still be set for backward compatibility
+        # But new code should pass wallet_address to create_micropayment directly
         self.agent_wallet_address = agent_wallet_address or os.getenv("AGENT_WALLET_ADDRESS")
         # Circle Gateway API base URL
         # Gateway balances API uses gateway-api.circle.com/v1
@@ -106,7 +108,14 @@ class GatewayService:
             
             if response.status_code == 200:
                 data = response.json()
+                logger.debug(f"Gateway API response: {data}")
+                
+                # Gateway API might return balances in different formats
+                # Try multiple possible response structures
                 balances = data.get("balances", [])
+                if not balances:
+                    # Try alternative structure
+                    balances = data.get("data", {}).get("balances", [])
                 
                 if balances:
                     # Balance is returned as string decimal
@@ -114,11 +123,14 @@ class GatewayService:
                     balance = Decimal(balance_str)
                     logger.info(
                         f"Gateway balance for {address[:10]}... on domain {domain_id}: "
-                        f"{balance} USDC"
+                        f"{balance} USDC (raw: {balance_str})"
                     )
                     return balance
                 else:
-                    logger.warning(f"No balance found for {address[:10]}... on domain {domain_id}")
+                    logger.warning(
+                        f"No balance found for {address[:10]}... on domain {domain_id}. "
+                        f"Response structure: {list(data.keys())}"
+                    )
                     return Decimal("0")
             else:
                 logger.warning(
@@ -137,6 +149,7 @@ class GatewayService:
         self,
         amount: Decimal,
         payment_id: str,
+        wallet_address: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """
@@ -170,22 +183,25 @@ class GatewayService:
         # USDC uses 6 decimal places, so 0.10 USDC = 100000 (raw units)
         amount_raw = int(amount * Decimal("1000000"))
         
-        # Verify Gateway balance if agent wallet is configured
-        if self.agent_wallet_address:
-            logger.info(f"Verifying Gateway balance for payment of {amount} USDC")
-            current_balance = await self.get_balance(self.agent_wallet_address)
+        # Use provided wallet_address or fall back to agent_wallet_address for backward compatibility
+        wallet_to_check = wallet_address or self.agent_wallet_address
+        
+        # Verify Gateway balance if wallet is configured
+        if wallet_to_check:
+            logger.info(f"Verifying Gateway balance for payment of {amount} USDC (wallet: {wallet_to_check[:10]}...)")
+            current_balance = await self.get_balance(wallet_to_check)
             
             if current_balance is not None:
                 if current_balance < amount:
                     logger.error(
                         f"Insufficient Gateway balance: {current_balance} USDC < "
-                        f"{amount} USDC required for payment {payment_id}"
+                        f"{amount} USDC required for payment {payment_id} (wallet: {wallet_to_check[:10]}...)"
                     )
                     return None
                 else:
                     logger.info(
                         f"Gateway balance verified: {current_balance} USDC available, "
-                        f"{amount} USDC required - sufficient funds"
+                        f"{amount} USDC required - sufficient funds (wallet: {wallet_to_check[:10]}...)"
                     )
             else:
                 # Balance check failed (API error, network issue, etc.)
@@ -194,11 +210,11 @@ class GatewayService:
                 logger.warning(
                     f"Could not verify Gateway balance (API unavailable or wallet not found), "
                     f"but proceeding with receipt issuance. Payment ID: {payment_id}. "
-                    f"Consider checking balance manually."
+                    f"Wallet: {wallet_to_check[:10]}... Consider checking balance manually."
                 )
         else:
             logger.info(
-                "Agent wallet address not configured, issuing receipt without balance verification"
+                "Wallet address not provided and agent wallet not configured, issuing receipt without balance verification"
             )
         
         # Issue receipt token
