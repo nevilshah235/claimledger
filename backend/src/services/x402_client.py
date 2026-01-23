@@ -41,6 +41,7 @@ class X402Client:
         url: str,
         data: Dict[str, Any],
         claim_id: str,
+        wallet_address: Optional[str] = None,
         method: str = "POST"
     ) -> Dict[str, Any]:
         """
@@ -77,10 +78,11 @@ class X402Client:
             payment_id = payment_details.get("gateway_payment_id")
             description = response.headers.get("X-Payment-Description", "x402 payment")
             
-            # Pay via Gateway
+            # Pay via Gateway using provided wallet address
             receipt = await self.gateway.create_micropayment(
                 amount=amount,
                 payment_id=payment_id,
+                wallet_address=wallet_address,
                 metadata={
                     "claim_id": claim_id,
                     "description": description
@@ -103,11 +105,11 @@ class X402Client:
         
         return response.json()
     
-    async def verify_document(self, claim_id: str, document_path: str) -> Dict[str, Any]:
+    async def verify_document(self, claim_id: str, document_path: str, wallet_address: Optional[str] = None) -> Dict[str, Any]:
         """
         Call document verification endpoint with x402 handling.
         
-        Price: $0.10 USDC
+        Price: $0.05 USDC
         """
         return await self.call_with_payment(
             url="/verifier/document",
@@ -115,14 +117,15 @@ class X402Client:
                 "claim_id": claim_id,
                 "document_path": document_path
             },
-            claim_id=claim_id
+            claim_id=claim_id,
+            wallet_address=wallet_address
         )
     
-    async def verify_image(self, claim_id: str, image_path: str) -> Dict[str, Any]:
+    async def verify_image(self, claim_id: str, image_path: str, wallet_address: Optional[str] = None) -> Dict[str, Any]:
         """
         Call image analysis endpoint with x402 handling.
         
-        Price: $0.15 USDC
+        Price: $0.10 USDC
         """
         return await self.call_with_payment(
             url="/verifier/image",
@@ -130,21 +133,23 @@ class X402Client:
                 "claim_id": claim_id,
                 "image_path": image_path
             },
-            claim_id=claim_id
+            claim_id=claim_id,
+            wallet_address=wallet_address
         )
     
-    async def verify_fraud(self, claim_id: str) -> Dict[str, Any]:
+    async def verify_fraud(self, claim_id: str, wallet_address: Optional[str] = None) -> Dict[str, Any]:
         """
         Call fraud check endpoint with x402 handling.
         
-        Price: $0.10 USDC
+        Price: $0.05 USDC
         """
         return await self.call_with_payment(
             url="/verifier/fraud",
             data={
                 "claim_id": claim_id
             },
-            claim_id=claim_id
+            claim_id=claim_id,
+            wallet_address=wallet_address
         )
 
 
