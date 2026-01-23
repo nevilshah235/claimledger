@@ -152,6 +152,44 @@ export const api = {
         body: formData,
       });
     },
+
+    // Get evidence files for a claim
+    getEvidence: async (claimId: string): Promise<Array<{
+      id: string;
+      file_type: string;
+      file_path: string;
+      file_size: number | null;
+      mime_type: string | null;
+      created_at: string;
+    }>> => {
+      return fetchAPI(`/claims/${claimId}/evidence`);
+    },
+
+    // Download evidence file
+    downloadEvidence: async (claimId: string, evidenceId: string): Promise<Blob> => {
+      const url = `${API_BASE_URL}/claims/${claimId}/evidence/${evidenceId}/download`;
+      const token = getAuthToken();
+      
+      const headers: Record<string, string> = {
+        'Accept': '*/*',
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to download file: ${response.statusText}`);
+      }
+
+      return response.blob();
+    },
   },
 
   // Agent Evaluation
