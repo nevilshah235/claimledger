@@ -514,7 +514,13 @@ export const api = {
 
     getFees: async (): Promise<{
       wallet_address: string | null;
-      current_balance: number | null;
+      current_balance: {
+        balances: Array<{
+          amount: string;
+          token: { symbol: string; name?: string; decimals?: number };
+        }>;
+        wallet_id?: string;
+      } | null;
       total_spent: number;
       total_evaluations: number;
       average_cost_per_evaluation: number;

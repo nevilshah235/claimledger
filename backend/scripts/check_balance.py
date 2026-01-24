@@ -32,15 +32,14 @@ def check_balance(wallet_id: str = None):
         print("   Set DEPLOYER_WALLET_ID in .env or pass as argument")
         sys.exit(1)
     
-    headers = {
-        "Authorization": f"Bearer {CIRCLE_API_KEY}",
-    }
-    
+    # Developer-style: Bearer only. For user-controlled wallets, X-User-Token is required.
+    headers = {"Authorization": f"Bearer {CIRCLE_API_KEY}"}
+
     try:
         response = httpx.get(
             f"https://api.circle.com/v1/w3s/wallets/{wallet_id}/balances",
             headers=headers,
-            params={"chain": "ARC"}
+            params={"chain": "ARC"},
         )
         response.raise_for_status()
         

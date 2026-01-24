@@ -58,7 +58,7 @@ class ADKOrchestratorAgent:
         }
     
     # Confidence thresholds (enforced in code)
-    AUTO_APPROVE_THRESHOLD = 0.95  # >= 95% confidence: auto-approve
+    AUTO_APPROVE_THRESHOLD = 0.70  # >= 70% confidence: auto-approve (with fraud_risk < 0.3 and no contradictions)
     HIGH_CONFIDENCE_THRESHOLD = 0.85  # >= 85% confidence: can approve with human review
     MEDIUM_CONFIDENCE_THRESHOLD = 0.70  # >= 70% confidence: needs human review
     LOW_CONFIDENCE_THRESHOLD = 0.50  # >= 50% confidence: request more data
@@ -121,7 +121,7 @@ class ADKOrchestratorAgent:
 - validate_claim_data(claim_id, claim_amount, extracted_data, damage_assessment, cost_analysis, cross_check_result)
 - verify_fraud(claim_id) — you MUST call this; use its fraud_score and risk_level in your reasoning.
 
-**Phase 3:** If amounts match, validate_claim_data recommends PROCEED, verify_fraud shows low risk, and confidence >= 0.95, then call approve_claim(claim_id, amount, recipient).
+**Phase 3:** If amounts match, validate_claim_data recommends PROCEED, verify_fraud shows low risk, and confidence >= 0.70, then call approve_claim(claim_id, amount, recipient).
 
 **Contradictions:** Use the cross_check_amounts tool's "warnings" field as the source for amount-related contradictions. Do not invent contradictions that compare USD to raw INR.
 
@@ -497,7 +497,25 @@ Available Evidence:
                 # Add cross_check warnings and de-dupe, keeping order
                 merged = list(dict.fromkeys(existing + [str(w) for w in warnings]))
                 result["contradictions"] = merged
-        
+
+        # 5% leniency: drop claim-vs-document amount contradictions when (a) cross_check says within 5%, or
+        # (b) the contradiction text itself shows the amounts match (e.g. "≈ $12.0" vs claim $12). Cap fraud when we drop any.
+        prev_contradictions = result.get("contradictions") or []
+        claim_amt = float(claim_amount)
+        result["contradictions"] = [
+            c for c in prev_contradictions
+            if not (
+                self._is_claim_vs_document_amount_contradiction(c)
+                and (
+                    cc.get("claim_vs_document_within_5_percent")
+                    or self._contradiction_amounts_effectively_match(c, claim_amt)
+                )
+            )
+        ]
+        dropped_any = len(prev_contradictions) > len(result["contradictions"])
+        if dropped_any and float(result.get("fraud_risk", 0.5)) >= 0.3:
+            result["fraud_risk"] = 0.25
+
         # Process decision based on confidence
         agent_confidence = float(result.get("confidence", 0.5))
         
@@ -808,6 +826,33 @@ Available Evidence:
         
         return result
     
+    def _is_claim_vs_document_amount_contradiction(self, s: str) -> bool:
+        """True if the contradiction is about claim amount vs document amount (to drop when within 5%)."""
+        if not s or not isinstance(s, str):
+            return False
+        t = s.lower()
+        if "document" not in t or "amount" not in t:
+            return False
+        return "claim" in t or "differs" in t or "match" in t or "mismatch" in t or "does not" in t
+
+    def _contradiction_amounts_effectively_match(self, s: str, claim_amount: float) -> bool:
+        """True if the contradiction text implies the two amounts are the same (e.g. '≈ $12.0' and claim $12)."""
+        if not s or not isinstance(s, str) or claim_amount is None:
+            return False
+        import re
+        # "≈ $12.0" or "= $12" or "≈ $12" — the document side in USD
+        m = re.search(r'[≈=]\s*\$\s*([\d,]+(?:\.\d+)?)', s)
+        if not m:
+            return False
+        try:
+            doc_val = float(m.group(1).replace(',', ''))
+        except ValueError:
+            return False
+        if doc_val <= 0:
+            return False
+        diff_pct = abs(claim_amount - doc_val) / max(claim_amount, doc_val, 0.01) * 100
+        return diff_pct <= 5
+
     def _demo_can_auto_approve(
         self,
         tool_results: Dict[str, Any],
@@ -886,7 +931,7 @@ Available Evidence:
                 else:
                     return "INSUFFICIENT_DATA"
         
-        # Rule 2: AUTO_APPROVED if confidence >= 0.95 AND no contradictions AND fraud_risk < 0.3
+        # Rule 2: AUTO_APPROVED if confidence >= 70% AND no contradictions AND fraud_risk < 0.3
         if auto_approve_conditions_met:
             return "AUTO_APPROVED"
         

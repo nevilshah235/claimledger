@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Claim, Evidence, User, UserWallet
+from ..models import Claim, Evidence, Evaluation, User, UserWallet
 from ..api.auth import get_current_user, security
 
 router = APIRouter(prefix="/claims", tags=["claims"])
@@ -42,6 +42,7 @@ class ClaimResponse(BaseModel):
     decision_overridden: Optional[bool] = False
     review_reasons: Optional[list] = None  # Admin only; reasons for manual review
     contradictions: Optional[list] = None  # Admin only; e.g. amount mismatches
+    reasoning: Optional[str] = None  # AI narrative (from latest evaluation)
     created_at: datetime
 
     class Config:
@@ -232,6 +233,7 @@ async def list_claims(
             decision_overridden=getattr(claim, 'decision_overridden', False),
             review_reasons=getattr(claim, 'review_reasons', None),
             contradictions=getattr(claim, 'contradictions', None),
+            reasoning=None,
             created_at=claim.created_at
         )
         for claim in claims
@@ -284,7 +286,10 @@ async def get_claim(
                     )
         except HTTPException:
             pass  # Allow unauthenticated viewing for demo
-    
+
+    latest_eval = db.query(Evaluation).filter(Evaluation.claim_id == claim_id).order_by(Evaluation.created_at.desc()).first()
+    reasoning = latest_eval.reasoning if latest_eval else None
+
     return ClaimResponse(
         id=str(claim.id),
         claimant_address=claim.claimant_address,
@@ -302,6 +307,7 @@ async def get_claim(
         decision_overridden=getattr(claim, 'decision_overridden', False),
         review_reasons=getattr(claim, 'review_reasons', None),
         contradictions=getattr(claim, 'contradictions', None),
+        reasoning=reasoning,
         created_at=claim.created_at
     )
 
@@ -343,6 +349,7 @@ async def request_additional_data(
         decision_overridden=getattr(claim, 'decision_overridden', False),
         review_reasons=getattr(claim, 'review_reasons', None),
         contradictions=getattr(claim, 'contradictions', None),
+        reasoning=None,
         created_at=claim.created_at,
     )
 
@@ -382,6 +389,9 @@ async def override_decision(
     db.commit()
     db.refresh(claim)
 
+    latest_eval = db.query(Evaluation).filter(Evaluation.claim_id == claim_id).order_by(Evaluation.created_at.desc()).first()
+    reasoning = latest_eval.reasoning if latest_eval else None
+
     return ClaimResponse(
         id=str(claim.id),
         claimant_address=claim.claimant_address,
@@ -399,6 +409,7 @@ async def override_decision(
         decision_overridden=getattr(claim, 'decision_overridden', False),
         review_reasons=getattr(claim, 'review_reasons', None),
         contradictions=getattr(claim, 'contradictions', None),
+        reasoning=reasoning,
         created_at=claim.created_at,
     )
 
@@ -498,6 +509,7 @@ async def add_claim_evidence(
         decision_overridden=getattr(claim, 'decision_overridden', False),
         review_reasons=getattr(claim, 'review_reasons', None),
         contradictions=getattr(claim, 'contradictions', None),
+        reasoning=None,
         created_at=claim.created_at,
     )
 
@@ -555,6 +567,7 @@ async def reset_evaluating(
         decision_overridden=getattr(claim, "decision_overridden", False),
         review_reasons=getattr(claim, 'review_reasons', None),
         contradictions=getattr(claim, 'contradictions', None),
+        reasoning=None,
         created_at=claim.created_at,
     )
 

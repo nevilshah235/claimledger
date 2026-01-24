@@ -250,45 +250,6 @@ export function AdminFeeTracker({ refreshTrigger }: { refreshTrigger?: number })
           </div>
         )}
 
-        {/* Recent Fee Breakdown */}
-        {feeData.fee_breakdown.length > 0 && (
-          <div>
-            <h3 className="text-sm font-semibold admin-text-primary mb-3">Recent Evaluations</h3>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {feeData.fee_breakdown.map((breakdown) => (
-                <div
-                  key={breakdown.claim_id}
-                  className="bg-white/5 rounded-lg p-3 border border-white/10"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <span className="text-xs font-mono admin-text-secondary">
-                        #{breakdown.claim_id.slice(0, 8)}
-                      </span>
-                      <span className="ml-2 text-xs admin-text-secondary">
-                        {formatDate(breakdown.timestamp)}
-                      </span>
-                    </div>
-                    <div className="text-sm font-bold admin-text-primary">
-                      {formatCurrency(breakdown.total_cost)}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(breakdown.tool_costs).map(([tool, cost]) => (
-                      <span
-                        key={tool}
-                        className="text-xs px-2 py-1 rounded bg-white/5 border border-white/10 admin-text-secondary"
-                      >
-                        {tool.replace('verify_', '')}: {formatCurrency(cost)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
       </div>
     </Card>
   );

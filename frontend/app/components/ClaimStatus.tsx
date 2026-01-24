@@ -414,12 +414,13 @@ export function ClaimStatus({
 
             {/* Extracted Information Summary */}
             {agentResults.length > 0 && (
-              <ExtractedInfoSummary agentResults={agentResults} />
+              <ExtractedInfoSummary agentResults={agentResults} claimId={claim.id} />
             )}
 
             {/* Review Reasons + Contradictions: admin only; never show to claimant */}
             {!claimantView && (claim.decision === 'NEEDS_REVIEW' || claim.decision === 'APPROVED_WITH_REVIEW') && (
               <ReviewReasonsList
+                reasoning={evaluationResult?.reasoning ?? claim.reasoning ?? null}
                 reviewReasons={evaluationResult?.review_reasons ?? claim.review_reasons ?? null}
                 contradictions={evaluationResult?.contradictions ?? claim.contradictions ?? null}
                 humanReviewRequired={claim.human_review_required}

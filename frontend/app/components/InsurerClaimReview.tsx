@@ -165,13 +165,14 @@ export function InsurerClaimReview({
             />
 
             {agentResults.length > 0 && (
-              <ExtractedInfoSummary agentResults={agentResults} />
+              <ExtractedInfoSummary agentResults={agentResults} claimId={claim.id} />
             )}
 
             {(claim.decision === 'NEEDS_REVIEW' ||
               claim.decision === 'APPROVED_WITH_REVIEW' ||
               claim.human_review_required) && (
               <ReviewReasonsList
+                reasoning={claim.reasoning ?? null}
                 reviewReasons={claim.review_reasons ?? null}
                 contradictions={claim.contradictions ?? null}
                 humanReviewRequired={claim.human_review_required}

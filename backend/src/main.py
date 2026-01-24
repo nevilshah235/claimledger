@@ -7,13 +7,17 @@ ClaimLedger API - Agentic insurance claims with:
 """
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .database import check_db_accessible, init_db
+
+logger = logging.getLogger(__name__)
 
 # Import API routers
 from .api.claims import router as claims_router
@@ -82,6 +86,7 @@ cors_allow_origins_from_env = [
 
 default_allow_origins = [
     "https://claimledger.vercel.app",
+    "https://uclaim.vercel.app",
     "http://localhost:3000",  # Next.js dev server
     "http://localhost:3001",
     "http://127.0.0.1:3000",
@@ -106,6 +111,22 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    Catch unhandled exceptions and return JSON 500 so the response passes through
+    CORSMiddleware. When the backend returns 500 without this handler, the response
+    can be generated outside the middleware chain and miss CORS headers, which makes
+    the browser report a CORS error instead of the actual 500.
+    """
+    logger.error("Unhandled exception: %s", exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
 
 # Include API routers
 app.include_router(claims_router)

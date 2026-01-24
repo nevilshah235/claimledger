@@ -565,7 +565,7 @@ async def chat_assistant(
             context_block = f"\n\nClaim context (authoritative):\n{claim_context}\n"
 
         system = (
-            "You are UClaim's in-product assistant. "
+            "You are ClaimLedger's in-product assistant. "
             "Be concise, accurate, and role-aware. "
             "Avoid crypto jargon; say 'enable settlements' instead of 'connect wallet'. "
             "Never claim you moved funds. "

@@ -320,7 +320,7 @@ class ADKOrchestrator:
         # Determine decision based on confidence thresholds (with FRAUD_DETECTED support)
         print(f"\n⚖️  [ORCHESTRATOR] Phase 3: Decision Making")
         print(f"   └─ Evaluating thresholds:")
-        print(f"      • Confidence: {confidence:.2%} (threshold: 95% for auto-approve)")
+        print(f"      • Confidence: {confidence:.2%} (threshold: 70% for auto-approve)")
         print(f"      • Contradictions: {len(contradictions)} (threshold: 0 for auto-approve)")
         print(f"      • Fraud Risk: {fraud_risk:.2f} (threshold: <0.3 for auto-approve, >=0.7 for fraud)")
         
@@ -335,7 +335,7 @@ class ADKOrchestrator:
                 })
             auto_settled = False
             tx_hash = None
-        elif confidence >= 0.95 and len(contradictions) == 0 and fraud_risk < 0.3:
+        elif confidence >= 0.70 and len(contradictions) == 0 and fraud_risk < 0.3:
             decision = "AUTO_APPROVED"
             print(f"   └─ ✅ Decision: AUTO_APPROVED (all thresholds met)")
             log(f"High confidence ({confidence:.2%}) with no contradictions and low fraud risk. Auto-approving claim.", 
@@ -788,8 +788,8 @@ Write as if explaining to a non-technical user."""
         """Extract reasons why claim needs manual review."""
         reasons = []
         confidence = reasoning_result.get("final_confidence", 0)
-        if confidence < 0.95:
-            reasons.append(f"Confidence {confidence:.2%} below 95% threshold")
+        if confidence < 0.70:
+            reasons.append(f"Confidence {confidence:.2%} below 70% threshold")
         
         contradictions = reasoning_result.get("contradictions", [])
         if contradictions:

@@ -70,40 +70,48 @@ def init_db():
                     conn.execute(text("ALTER TABLE claims ADD COLUMN decision_overridden INTEGER DEFAULT 0"))
                 if "contradictions" not in cols:
                     conn.execute(text("ALTER TABLE claims ADD COLUMN contradictions TEXT"))
+                if "auto_approved" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN auto_approved INTEGER DEFAULT 0"))
+                if "auto_settled" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN auto_settled INTEGER DEFAULT 0"))
+                if "comprehensive_summary" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN comprehensive_summary TEXT"))
+                if "review_reasons" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN review_reasons TEXT"))
+                if "requested_data" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN requested_data TEXT"))
+                if "human_review_required" not in cols:
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN human_review_required INTEGER DEFAULT 0"))
             elif dialect == "postgresql":
-                exists = conn.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM information_schema.columns
-                        WHERE table_name = 'claims' AND column_name = 'description'
-                        """
-                    )
-                ).first()
-                if not exists:
+                def _col_exists(t: str, c: str) -> bool:
+                    return conn.execute(
+                        text(
+                            "SELECT 1 FROM information_schema.columns "
+                            "WHERE table_name = :t AND column_name = :c"
+                        ),
+                        {"t": t, "c": c},
+                    ).first() is not None
+
+                if not _col_exists("claims", "description"):
                     conn.execute(text("ALTER TABLE claims ADD COLUMN description TEXT"))
-                exists_do = conn.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM information_schema.columns
-                        WHERE table_name = 'claims' AND column_name = 'decision_overridden'
-                        """
-                    )
-                ).first()
-                if not exists_do:
+                if not _col_exists("claims", "decision_overridden"):
                     conn.execute(text("ALTER TABLE claims ADD COLUMN decision_overridden BOOLEAN DEFAULT FALSE"))
-                exists_c = conn.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM information_schema.columns
-                        WHERE table_name = 'claims' AND column_name = 'contradictions'
-                        """
-                    )
-                ).first()
-                if not exists_c:
+                if not _col_exists("claims", "contradictions"):
                     conn.execute(text("ALTER TABLE claims ADD COLUMN contradictions JSON"))
+                if not _col_exists("claims", "auto_approved"):
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN auto_approved BOOLEAN DEFAULT FALSE"))
+                if not _col_exists("claims", "auto_settled"):
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN auto_settled BOOLEAN DEFAULT FALSE"))
+                if not _col_exists("claims", "comprehensive_summary"):
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN comprehensive_summary TEXT"))
+                if not _col_exists("claims", "review_reasons"):
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN review_reasons JSON"))
+                if not _col_exists("claims", "requested_data"):
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN requested_data JSON"))
+                if not _col_exists("claims", "human_review_required"):
+                    conn.execute(text("ALTER TABLE claims ADD COLUMN human_review_required BOOLEAN DEFAULT FALSE"))
+
+            conn.commit()
 
         db_info = DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL
         # Don't log full connection string for security

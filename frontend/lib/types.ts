@@ -36,6 +36,7 @@ export interface Claim {
   decision_overridden?: boolean;
   review_reasons?: string[] | null;
   contradictions?: string[] | null;
+  reasoning?: string | null;
 }
 
 export interface AutoSettleWalletResponse {

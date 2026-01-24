@@ -1,11 +1,23 @@
 'use client';
 
-import { useState } from 'react';
-import { Card } from './ui';
+import { useState, useEffect } from 'react';
+import { Card, Button } from './ui';
 import { AgentResult } from '@/lib/types';
+import { api } from '@/lib/api';
+
+interface EvidenceFile {
+  id: string;
+  file_type: string;
+  file_path: string;
+  file_size: number | null;
+  mime_type: string | null;
+  created_at: string;
+}
 
 interface ExtractedInfoSummaryProps {
   agentResults: AgentResult[];
+  /** When provided, fetches and displays the uploaded documents/images above the extracted summary. */
+  claimId?: string;
 }
 
 // Field group labels and their sort order
@@ -83,6 +95,27 @@ function formatFieldValue(value: any): string {
   return String(value);
 }
 
+function getCurrencyPrefix(currency: unknown): string {
+  if (currency == null || typeof currency !== 'string') return '$';
+  const c = String(currency).trim().toUpperCase();
+  if (/^(INR|RS\.?|₹|RUPEES?|INDIAN\s*RUPEES?)$/i.test(c)) return 'Rs. ';
+  return '$';
+}
+
+function isMoneyColumn(header: string): boolean {
+  const h = header.toLowerCase();
+  return h === 'unit_price' || h === 'unit price' || h === 'total' || h === 'amount' || h === 'price' ||
+    h.includes('price') || (h.includes('total') && !h.includes('quantity'));
+}
+
+function formatFieldValueForCell(value: any, header: string, currency: unknown): string {
+  if (isMoneyColumn(header)) {
+    const n = typeof value === 'number' ? value : (typeof value === 'string' && /^-?[\d.]+$/.test(value) ? Number(value) : NaN);
+    if (!Number.isNaN(n)) return getCurrencyPrefix(currency) + Number(n).toFixed(2);
+  }
+  return formatFieldValue(value);
+}
+
 // Component to render a single field
 function FieldDisplay({ label, value }: { label: string; value: any }) {
   if (value === null || value === undefined || value === '') return null;
@@ -120,8 +153,8 @@ function FieldGroupSection({
   );
 }
 
-// Line items as a table (always visible, with section header)
-function LineItemsTable({ lineItems }: { lineItems: any[] }) {
+// Line items as a table (always visible, with section header). Uses document currency for Unit Price, Total, etc.
+function LineItemsTable({ lineItems, currency }: { lineItems: any[]; currency?: unknown }) {
   if (!lineItems || lineItems.length === 0) return null;
 
   const cols = new Set<string>();
@@ -153,7 +186,7 @@ function LineItemsTable({ lineItems }: { lineItems: any[] }) {
               <tr key={idx} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-800/30">
                 {filteredHeaders.map((h) => (
                   <td key={h} className="px-3 py-2 text-slate-100">
-                    {formatFieldValue((item || {})[h])}
+                    {formatFieldValueForCell((item || {})[h], h, currency)}
                   </td>
                 ))}
               </tr>
@@ -189,8 +222,8 @@ function normalizeTable(table: { headers?: unknown; rows?: unknown }): { headers
   return { headers, rows };
 }
 
-// Component to render tables (headers + full data grid when rows are available)
-function TablesDisplay({ tables }: { tables: any[] }) {
+// Component to render tables (headers + full data grid when rows are available). Currency-aware for money columns.
+function TablesDisplay({ tables, currency }: { tables: any[]; currency?: unknown }) {
   const [expanded, setExpanded] = useState(false);
 
   if (!tables || tables.length === 0) return null;
@@ -234,7 +267,7 @@ function TablesDisplay({ tables }: { tables: any[] }) {
                               <tr key={rIdx} className="border-b border-slate-700/50 last:border-0 hover:bg-slate-800/30">
                                 {keptIndices.map((colIdx, cIdx) => (
                                   <td key={cIdx} className="px-2 py-1.5 text-slate-100">
-                                    {formatFieldValue(Array.isArray(row) ? row[colIdx] : '')}
+                                    {formatFieldValueForCell(Array.isArray(row) ? row[colIdx] : '', safeHeaders[cIdx], currency)}
                                   </td>
                                 ))}
                               </tr>
@@ -259,7 +292,73 @@ function TablesDisplay({ tables }: { tables: any[] }) {
   );
 }
 
-export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps) {
+function getEvidenceFileName(filePath: string) {
+  return filePath.split('/').pop() || filePath;
+}
+
+function formatEvidenceFileSize(bytes: number | null) {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function ExtractedInfoSummary({ agentResults, claimId }: ExtractedInfoSummaryProps) {
+  const [evidence, setEvidence] = useState<EvidenceFile[]>([]);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [viewingFile, setViewingFile] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!claimId) {
+      setEvidence([]);
+      setEvidenceError(null);
+      return;
+    }
+    let cancelled = false;
+    setEvidenceLoading(true);
+    setEvidenceError(null);
+    api.claims.getEvidence(claimId)
+      .then((files) => {
+        if (!cancelled) setEvidence(files);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setEvidenceError(err instanceof Error ? err.message : 'Failed to load evidence');
+      })
+      .finally(() => {
+        if (!cancelled) setEvidenceLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [claimId]);
+
+  const handleViewImage = async (evidenceId: string) => {
+    if (!claimId) return;
+    try {
+      const blob = await api.claims.downloadEvidence(claimId, evidenceId);
+      const url = window.URL.createObjectURL(blob);
+      setViewingFile(url);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDownload = async (evidenceId: string, filename: string) => {
+    if (!claimId) return;
+    try {
+      const blob = await api.claims.downloadEvidence(claimId, evidenceId);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch {
+      // ignore
+    }
+  };
+
   // Resolve from agent_type: support both canonical (document) and tool (verify_document) names
   const documentResult = agentResults.find(r => r.agent_type === 'document' || r.agent_type === 'verify_document');
   const imageResult = agentResults.find(r => r.agent_type === 'image' || r.agent_type === 'verify_image');
@@ -275,9 +374,71 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
   }
 
   return (
+    <>
     <Card className="p-6 admin-card">
       <h3 className="text-sm font-medium text-slate-100 mb-4">Extracted Information Summary</h3>
       <div className="space-y-4">
+        {/* Uploaded documents */}
+        {claimId && (
+          <div className="p-4 rounded-lg bg-slate-500/10 border border-slate-500/30">
+            <h4 className="text-sm font-medium text-white mb-3">Uploaded documents</h4>
+            {evidenceLoading && (
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <div className="w-3 h-3 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+                Loading…
+              </div>
+            )}
+            {evidenceError && (
+              <p className="text-xs text-amber-400">{evidenceError}</p>
+            )}
+            {!evidenceLoading && !evidenceError && evidence.length === 0 && (
+              <p className="text-xs text-slate-400">No documents or images uploaded.</p>
+            )}
+            {!evidenceLoading && evidence.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {evidence.map((file) => {
+                  const filename = getEvidenceFileName(file.file_path);
+                  const isImage = file.file_type === 'image' || (file.mime_type != null && file.mime_type.startsWith('image/'));
+                  const size = formatEvidenceFileSize(file.file_size);
+                  return (
+                    <div
+                      key={file.id}
+                      className="flex items-center gap-2 px-3 py-2 rounded-md border border-slate-600 bg-slate-800/50 text-xs"
+                    >
+                      {isImage ? (
+                        <span className="text-purple-400" aria-hidden>🖼️</span>
+                      ) : (
+                        <span className="text-blue-400" aria-hidden>📄</span>
+                      )}
+                      <span className="text-slate-200 truncate max-w-[140px]" title={filename}>
+                        {filename}
+                      </span>
+                      {size && <span className="text-slate-500 shrink-0">{size}</span>}
+                      {isImage && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleViewImage(file.id)}
+                          className="h-6 px-2 text-xs text-slate-300 hover:text-white"
+                        >
+                          View
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDownload(file.id, filename)}
+                        className="h-6 px-2 text-xs text-slate-300 hover:text-white"
+                      >
+                        Download
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
         {/* From Documents: when extracted_data is present */}
         {documentResult?.result?.extracted_data && (() => {
           const extractedData = documentResult.result.extracted_data;
@@ -398,14 +559,14 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
                 );
               })()}
 
-              {/* Line Items – tabular */}
+              {/* Line Items – tabular (currency-aware: Rs. for INR/Rs, $ for USD) */}
               {lineItems && Array.isArray(lineItems) && lineItems.length > 0 && (
-                <LineItemsTable lineItems={lineItems} />
+                <LineItemsTable lineItems={lineItems} currency={extractedFields?.currency ?? extractedData?.currency} />
               )}
 
-              {/* Tables */}
+              {/* Tables (currency-aware for money columns) */}
               {tables && Array.isArray(tables) && tables.length > 0 && (
-                <TablesDisplay tables={tables} />
+                <TablesDisplay tables={tables} currency={extractedFields?.currency ?? extractedData?.currency} />
               )}
 
               {/* Metadata */}
@@ -656,5 +817,39 @@ export function ExtractedInfoSummary({ agentResults }: ExtractedInfoSummaryProps
         )}
       </div>
     </Card>
+
+      {/* Image viewer modal */}
+      {viewingFile && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => {
+            setViewingFile(null);
+            window.URL.revokeObjectURL(viewingFile);
+          }}
+        >
+          <div className="relative max-w-7xl max-h-[90vh] p-4">
+            <button
+              type="button"
+              onClick={() => {
+                setViewingFile(null);
+                window.URL.revokeObjectURL(viewingFile);
+              }}
+              className="absolute top-6 right-6 text-white hover:text-gray-300 bg-black/50 rounded-full p-2 z-10"
+              aria-label="Close"
+            >
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <img
+              src={viewingFile}
+              alt="Uploaded document"
+              className="max-w-full max-h-[90vh] object-contain rounded-lg"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        </div>
+      )}
+    </>
   );
 }

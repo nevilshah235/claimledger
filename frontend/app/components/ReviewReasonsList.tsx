@@ -3,21 +3,24 @@
 import { Card } from './ui';
 
 interface ReviewReasonsListProps {
+  reasoning?: string | null;
   reviewReasons?: string[] | null;
   contradictions?: string[] | null;
   humanReviewRequired?: boolean;
 }
 
 export function ReviewReasonsList({ 
+  reasoning,
   reviewReasons, 
   contradictions,
   humanReviewRequired 
 }: ReviewReasonsListProps) {
+  const hasReasoning = reasoning && reasoning.trim().length > 0;
   const hasReviewReasons = reviewReasons && reviewReasons.length > 0;
   const hasContradictions = contradictions && contradictions.length > 0;
 
-  // Only show if there is something to display (review reasons and/or contradictions)
-  if (!hasReviewReasons && !hasContradictions) {
+  // Show if there is AI reasoning, review reasons, and/or contradictions
+  if (!hasReasoning && !hasReviewReasons && !hasContradictions) {
     return null;
   }
 
@@ -38,13 +41,19 @@ export function ReviewReasonsList({
           )}
         </div>
       </div>
+
+      {hasReasoning && (
+        <div className="mb-4 ml-8">
+          <p className="text-xs font-medium text-amber-400/90 mb-1.5 uppercase tracking-wide">AI Reasoning</p>
+          <p className="text-sm text-amber-100/95 whitespace-pre-wrap">{reasoning!.trim()}</p>
+        </div>
+      )}
       
       {hasReviewReasons && (
-        <ul className="space-y-2 ml-8">
+        <ul className="space-y-2 ml-8 pl-5 list-disc marker:text-amber-400">
           {reviewReasons!.map((reason, index) => (
-            <li key={index} className="text-sm text-amber-100 flex items-start gap-2">
-              <span className="text-amber-400 mt-1">•</span>
-              <span>{reason}</span>
+            <li key={index} className="text-sm text-amber-100">
+              {reason}
             </li>
           ))}
         </ul>
@@ -53,11 +62,10 @@ export function ReviewReasonsList({
       {hasContradictions && (
         <div className={hasReviewReasons ? 'mt-4' : ''}>
           <p className="text-xs font-medium text-amber-400/90 mb-2 uppercase tracking-wide">Contradictions</p>
-          <ul className="space-y-2 ml-8">
+          <ul className="space-y-2 ml-8 pl-5 list-disc marker:text-amber-400">
             {contradictions!.map((c, index) => (
-              <li key={index} className="text-sm text-amber-100 flex items-start gap-2">
-                <span className="text-amber-400 mt-1">•</span>
-                <span>{c}</span>
+              <li key={index} className="text-sm text-amber-100">
+                {c}
               </li>
             ))}
           </ul>

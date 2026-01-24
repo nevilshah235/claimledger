@@ -6,13 +6,24 @@ This script registers your entity secret with Circle's Developer-Controlled Wall
 The entity secret must be registered before you can create wallets.
 
 Usage:
-    python scripts/register_entity_secret.py
+    python scripts/register_entity_secret.py                    # Fetch key, encrypt, POST to Circle
+    python scripts/register_entity_secret.py --print-ciphertext  # Only print ciphertext for manual paste
+    python scripts/register_entity_secret.py --sdk              # Use Circle SDK (pip install circle-developer-controlled-wallets)
+
+  --print-ciphertext   Generate and print the entity secret ciphertext (684 chars) for manual
+                       registration in Circle Console → Wallets → Developer-Controlled → Configurator
+                       https://console.circle.com/wallets/dev/configurator
+
+  --sdk                Use circle.web3.utils.register_entity_secret_ciphertext from the
+                       circle-developer-controlled-wallets package. Handles encryption, registration,
+                       and optionally a recovery file. Install: pip install circle-developer-controlled-wallets
 
 Requirements:
     - CIRCLE_WALLETS_API_KEY in environment or .env
     - CIRCLE_ENTITY_SECRET in environment or .env
 """
 
+import argparse
 import os
 import sys
 import asyncio
@@ -22,6 +33,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
+from Crypto.Hash import SHA256
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -29,8 +41,61 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 load_dotenv()
 
 
-async def register_entity_secret():
-    """Register entity secret with Circle."""
+def register_via_sdk() -> bool:
+    """
+    Register entity secret using Circle's SDK: circle.web3.utils.register_entity_secret_ciphertext.
+    Requires: pip install circle-developer-controlled-wallets
+    """
+    api_key = os.getenv("CIRCLE_WALLETS_API_KEY")
+    entity_secret = os.getenv("CIRCLE_ENTITY_SECRET")
+
+    if not api_key:
+        print("❌ ERROR: CIRCLE_WALLETS_API_KEY not set")
+        return False
+    if not entity_secret:
+        print("❌ ERROR: CIRCLE_ENTITY_SECRET not set")
+        return False
+    if len(entity_secret) != 64:
+        print(f"❌ ERROR: Entity secret must be 64 hex chars, got {len(entity_secret)}")
+        return False
+
+    try:
+        from circle.web3 import utils  # type: ignore[import-untyped]
+    except ImportError:
+        print("❌ circle-developer-controlled-wallets is not installed.")
+        print("   Install it with: pip install circle-developer-controlled-wallets")
+        return False
+
+    print("=" * 60)
+    print("REGISTERING ENTITY SECRET VIA CIRCLE SDK")
+    print("=" * 60)
+    print()
+    print(f"API Key: {api_key[:10]}...{api_key[-4:]}")
+    print(f"Entity Secret: {entity_secret[:8]}...{entity_secret[-8:]}")
+    print()
+    print("Calling utils.register_entity_secret_ciphertext(...)")
+    print()
+
+    try:
+        result = utils.register_entity_secret_ciphertext(
+            api_key=api_key,
+            entity_secret=entity_secret,
+            recoveryFileDownloadPath="",
+        )
+        print("✅ Result:")
+        print(result)
+        print()
+        print("=" * 60)
+        print("✅ REGISTRATION COMPLETE (via SDK)")
+        print("=" * 60)
+        return True
+    except Exception as e:
+        print(f"❌ SDK call failed: {e}")
+        return False
+
+
+async def register_entity_secret(print_ciphertext_only: bool = False):
+    """Register entity secret with Circle. If print_ciphertext_only, only generate and print ciphertext."""
     api_key = os.getenv("CIRCLE_WALLETS_API_KEY")
     entity_secret = os.getenv("CIRCLE_ENTITY_SECRET")
     
@@ -65,7 +130,7 @@ async def register_entity_secret():
     print("=" * 60)
     print()
     print(f"API Key: {api_key[:10]}...{api_key[-4:]}")
-    print(f"Entity Secret: {entity_secret[:8]}...{entity_secret[-8:]}")
+    print(f"Entity Secret: {entity_secret}")
     print()
     
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -73,7 +138,7 @@ async def register_entity_secret():
         print("Step 1: Fetching Circle's public key...")
         try:
             response = await client.get(
-                "https://api.circle.com/v1/config/entity/publicKey",
+                "https://api.circle.com/v1/w3s/config/entity/publicKey",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json"
@@ -96,14 +161,31 @@ async def register_entity_secret():
         print("Step 2: Encrypting entity secret...")
         try:
             public_key = RSA.import_key(public_key_pem)
-            cipher = PKCS1_OAEP.new(public_key)
+            # Circle requires RSA-OAEP with SHA-256 for both OAEP hash and MGF1
+            cipher = PKCS1_OAEP.new(public_key, hashAlgo=SHA256)
             encrypted_secret = cipher.encrypt(entity_secret_bytes)
             entity_secret_ciphertext = base64.b64encode(encrypted_secret).decode('utf-8')
             print("✅ Entity secret encrypted")
+            # Circle expects 684 chars (4096-bit RSA: 512 bytes → base64)
+            print(f"   Ciphertext length: {len(entity_secret_ciphertext)} chars (Circle expects 684)")
         except Exception as e:
             print(f"❌ Encryption failed: {e}")
             return False
-        
+
+        if print_ciphertext_only:
+            print()
+            print("=" * 60)
+            print("ENTITY SECRET CIPHERTEXT (copy for Circle Configurator)")
+            print("=" * 60)
+            print()
+            print("Paste this into: Circle Console → Wallets → Developer-Controlled → Configurator")
+            print("https://console.circle.com/wallets/dev/configurator")
+            print()
+            print(entity_secret_ciphertext)
+            print()
+            print("=" * 60)
+            return True
+
         # Step 3: Register with Circle
         print()
         print("Step 3: Registering with Circle...")
@@ -182,5 +264,21 @@ async def register_entity_secret():
 
 
 if __name__ == "__main__":
-    success = asyncio.run(register_entity_secret())
+    parser = argparse.ArgumentParser(description="Register entity secret with Circle (or print ciphertext for manual paste).")
+    parser.add_argument(
+        "--print-ciphertext",
+        action="store_true",
+        help="Only generate and print the entity secret ciphertext for manual paste in Circle Configurator",
+    )
+    parser.add_argument(
+        "--sdk",
+        action="store_true",
+        help="Use circle.web3.utils.register_entity_secret_ciphertext (requires circle-developer-controlled-wallets)",
+    )
+    args = parser.parse_args()
+
+    if args.sdk:
+        success = register_via_sdk()
+    else:
+        success = asyncio.run(register_entity_secret(print_ciphertext_only=args.print_ciphertext))
     sys.exit(0 if success else 1)

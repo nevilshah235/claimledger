@@ -145,6 +145,7 @@ async def cross_check_amounts(
         matches = True
         difference = 0.0
         difference_percent = 0.0
+        claim_vs_document_within_5_percent = False
 
         # Convert document amounts to USD when in INR/Rs (explicit or inferred from 50–200× ratio)
         def _infer_inr_if_ratio(amt: float, ref: float) -> Optional[str]:
@@ -161,20 +162,24 @@ async def cross_check_amounts(
             c = document_amount_currency or _infer_inr_if_ratio(float(document_amount), claim_amount)
             document_amount = _to_usd(float(document_amount), c)
         
-        # Compare with extracted_total
+        # Compare with extracted_total (often from document; when within 5%, treat as match for leniency)
         if extracted_total and extracted_total > 0:
             diff = abs(claim_amount - extracted_total)
             diff_pct = (diff / max(claim_amount, extracted_total)) * 100
+            if diff_pct <= 5:
+                claim_vs_document_within_5_percent = True
             if diff_pct > 20:  # More than 20% difference
                 matches = False
                 difference = diff
                 difference_percent = diff_pct
                 warnings.append(f"Claim amount (${claim_amount:,.2f}) differs from extracted total (${extracted_total:,.2f}) by {diff_pct:.1f}%")
         
-        # Compare with estimated_cost (already in USD from estimate_repair_cost)
+        # Compare with estimated_cost (already in USD from estimate_repair_cost; often document-derived)
         if estimated_cost and estimated_cost > 0:
             diff = abs(claim_amount - estimated_cost)
             diff_pct = (diff / max(claim_amount, estimated_cost)) * 100
+            if diff_pct <= 5:
+                claim_vs_document_within_5_percent = True
             if diff_pct > 20:  # More than 20% difference
                 matches = False
                 if difference == 0:
@@ -186,6 +191,8 @@ async def cross_check_amounts(
         if document_amount and document_amount > 0:
             diff = abs(claim_amount - document_amount)
             diff_pct = (diff / max(claim_amount, document_amount)) * 100
+            if diff_pct <= 5:
+                claim_vs_document_within_5_percent = True
             if diff_pct > 20:  # More than 20% difference
                 matches = False
                 if difference == 0:
@@ -199,6 +206,7 @@ async def cross_check_amounts(
             "difference": difference,
             "difference_percent": difference_percent,
             "warnings": warnings,
+            "claim_vs_document_within_5_percent": claim_vs_document_within_5_percent,
             "cost": 0.0  # FREE
         }
     except Exception as e:
@@ -209,5 +217,6 @@ async def cross_check_amounts(
             "difference": 0.0,
             "difference_percent": 0.0,
             "warnings": [f"Error: {str(e)}"],
+            "claim_vs_document_within_5_percent": False,
             "cost": 0.0
         }
